@@ -1,6 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express'
 
 import type { MessagingService } from '../core/index.js'
+import { messagesPublishedTotal } from '../observability/metrics.js'
 
 function userId(res: Response): string {
   return res.locals.userId as string
@@ -59,6 +60,7 @@ export function createConversationsRouter(messaging: MessagingService): Router {
         senderId: userId(res),
         body,
       })
+      messagesPublishedTotal.inc()
       res.status(201).json(message)
     } catch (error) {
       next(error)

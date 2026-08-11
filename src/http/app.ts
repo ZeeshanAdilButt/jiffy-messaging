@@ -1,12 +1,16 @@
 import express, { type Express } from 'express'
+import { pinoHttp } from 'pino-http'
 
 import { MessagingService } from '../core/index.js'
+import { logger } from '../observability/logger.js'
 import type { ConversationStore, MessageBus, MessageStore, TokenVerifier } from '../ports/index.js'
 import { createAuthMiddleware } from './auth-middleware.js'
 import { createConversationsRouter } from './conversations-router.js'
 import { errorHandler } from './error-handler.js'
 import { createHealthRouter } from './health-router.js'
+import { createMetricsRouter } from './metrics-router.js'
 import { createIpRateLimiter, createUserRateLimiter } from './rate-limit.js'
+import { createRequestMetricsMiddleware } from './request-metrics-middleware.js'
 
 export interface HttpAppConfig {
   conversations: ConversationStore
@@ -33,11 +37,15 @@ export function createHttpApp(config: HttpAppConfig): Express {
   const messaging = new MessagingService(config.conversations, config.messages, config.messageBus)
 
   const app = express()
+  app.use(pinoHttp({ logger }))
+  app.use(createRequestMetricsMiddleware())
   app.use(express.json())
-  // Health and readiness are unauthenticated, unrated, and sit before
-  // everything else - a load balancer or kubelet probing them has no
-  // bearer token to send and should never be throttled.
+  // Health, readiness, and metrics are unauthenticated, unrated, and sit
+  // before everything else - a load balancer, kubelet, or Prometheus
+  // scraping them has no bearer token to send and should never be
+  // throttled.
   app.use(createHealthRouter({ readinessCheck: config.readinessCheck }))
+  app.use(createMetricsRouter())
   // IP-based, ahead of auth: a flood of requests with garbage tokens gets
   // capped before any of them pay the cost of token verification.
   app.use(createIpRateLimiter())

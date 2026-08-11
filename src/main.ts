@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url'
 
 import { JwtTokenVerifier } from './adapters/jwt/index.js'
 import { RedisMessageBus } from './adapters/redis/index.js'
+import { logger } from './observability/logger.js'
 import { createServer } from './server/create-server.js'
 
 export type JwtEnvConfig =
@@ -96,11 +97,11 @@ export function run(): void {
 
   server.listen(config.port, () => {
     const mode = messageBus ? 'multi-instance, via Redis' : 'single instance, in-process'
-    console.log(`jiffy-messaging listening on port ${config.port} (${mode})`)
+    logger.info({ port: config.port, mode }, 'jiffy-messaging listening')
   })
 
   const shutdown = (signal: string) => {
-    console.log(`Received ${signal}, shutting down`)
+    logger.info({ signal }, 'shutting down')
     server.close(() => {
       void Promise.all([pool.end(), ...redisClients.map((client) => client.quit())]).finally(() => process.exit(0))
     })

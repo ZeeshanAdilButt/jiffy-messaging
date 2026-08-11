@@ -54,6 +54,11 @@ describe('HTTP app', () => {
       expect(healthRes.status).toBe(200)
       expect(readyRes.status).toBe(200)
     })
+
+    it('does not require auth for /metrics', async () => {
+      const res = await request(app).get('/metrics')
+      expect(res.status).toBe(200)
+    })
   })
 
   describe('POST /conversations', () => {
@@ -116,6 +121,21 @@ describe('HTTP app', () => {
       const listRes = await authed(app, 'get', `/conversations/${conversationId}/messages`, 'user_b')
       expect(listRes.status).toBe(200)
       expect(listRes.body).toHaveLength(1)
+    })
+
+    it('counts a sent message in /metrics', async () => {
+      function readCounter(text: string): number {
+        const match = /^jiffy_messaging_messages_published_total (\d+)$/m.exec(text)
+        return match ? Number(match[1]) : 0
+      }
+
+      const before = readCounter((await request(app).get('/metrics')).text)
+
+      const conversationId = await createConversation()
+      await authed(app, 'post', `/conversations/${conversationId}/messages`, 'user_a').send({ body: 'hello' })
+
+      const after = readCounter((await request(app).get('/metrics')).text)
+      expect(after).toBe(before + 1)
     })
 
     it('rejects a non-string body', async () => {

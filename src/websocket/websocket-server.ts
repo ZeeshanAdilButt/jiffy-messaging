@@ -2,6 +2,8 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http'
 import { WebSocketServer } from 'ws'
 
 import type { Message } from '../domain/index.js'
+import { logger } from '../observability/logger.js'
+import { websocketConnectionsActive } from '../observability/metrics.js'
 import type { ConversationStore, MessageBus, TokenVerifier } from '../ports/index.js'
 import { ConnectionRateLimiter } from './connection-rate-limiter.js'
 import { ConnectionRegistry } from './connection-registry.js'
@@ -90,7 +92,14 @@ export function attachWebSocketServer(config: AttachWebSocketServerConfig): Conn
 
       wss.handleUpgrade(req, socket, head, (ws) => {
         registry.add(userId, ws)
-        ws.on('close', () => registry.remove(userId, ws))
+        websocketConnectionsActive.inc()
+        logger.info({ userId }, 'websocket connection opened')
+
+        ws.on('close', () => {
+          registry.remove(userId, ws)
+          websocketConnectionsActive.dec()
+          logger.info({ userId }, 'websocket connection closed')
+        })
       })
     })()
   })
