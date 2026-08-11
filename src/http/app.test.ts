@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import type { Express } from 'express'
 
 import { InMemoryConversationStore, InMemoryMessageStore } from '../adapters/in-memory/index.js'
-import type { TokenVerifier, VerifiedIdentity } from '../ports/index.js'
+import type { Message } from '../domain/index.js'
+import type { MessageBus, TokenVerifier, VerifiedIdentity } from '../ports/index.js'
 import { createHttpApp } from './app.js'
 
 // Token "user_a" verifies as user_a, "user_b" as user_b, anything else fails.
@@ -152,6 +153,34 @@ describe('HTTP app', () => {
       const getRes = await authed(app, 'get', `/conversations/${conversationId}`, 'user_a')
       const participant = getRes.body.participants.find((p: { userId: string }) => p.userId === 'user_a')
       expect(participant.lastReadAt).not.toBeNull()
+    })
+  })
+
+  describe('message bus wiring', () => {
+    it('publishes a message sent over REST to the configured bus', async () => {
+      const published: Message[] = []
+      const bus: MessageBus = {
+        async publish(message) {
+          published.push(message)
+        },
+        onMessage() {
+          return () => {}
+        },
+      }
+      const busApp = createHttpApp({
+        conversations: new InMemoryConversationStore(),
+        messages: new InMemoryMessageStore(),
+        tokenVerifier: new FixedTokenVerifier(),
+        messageBus: bus,
+      })
+
+      const createRes = await authed(busApp, 'post', '/conversations', 'user_a').send({
+        participantIds: ['user_a', 'user_b'],
+      })
+      await authed(busApp, 'post', `/conversations/${createRes.body.id}/messages`, 'user_a').send({ body: 'hi' })
+
+      expect(published).toHaveLength(1)
+      expect(published[0]).toMatchObject({ body: 'hi' })
     })
   })
 })
