@@ -6,6 +6,7 @@ import { createAuthMiddleware } from './auth-middleware.js'
 import { createConversationsRouter } from './conversations-router.js'
 import { errorHandler } from './error-handler.js'
 import { createHealthRouter } from './health-router.js'
+import { createIpRateLimiter, createUserRateLimiter } from './rate-limit.js'
 
 export interface HttpAppConfig {
   conversations: ConversationStore
@@ -33,11 +34,16 @@ export function createHttpApp(config: HttpAppConfig): Express {
 
   const app = express()
   app.use(express.json())
-  // Health and readiness are unauthenticated and sit before the auth
-  // middleware for that reason - a load balancer or kubelet probing them
-  // has no bearer token to send.
+  // Health and readiness are unauthenticated, unrated, and sit before
+  // everything else - a load balancer or kubelet probing them has no
+  // bearer token to send and should never be throttled.
   app.use(createHealthRouter({ readinessCheck: config.readinessCheck }))
+  // IP-based, ahead of auth: a flood of requests with garbage tokens gets
+  // capped before any of them pay the cost of token verification.
+  app.use(createIpRateLimiter())
   app.use(createAuthMiddleware(config.tokenVerifier))
+  // User-based, after auth resolves who the caller is - see rate-limit.ts.
+  app.use(createUserRateLimiter())
   app.use(createConversationsRouter(messaging))
   app.use(errorHandler)
 

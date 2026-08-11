@@ -49,6 +49,7 @@
   },
   "dependencies": {
     "express": "^5.2.1",
+    "express-rate-limit": "^8.6.2",
     "ioredis": "^6.0.0",
     "jose": "^6.2.8",
     "pg": "^8.23.0",

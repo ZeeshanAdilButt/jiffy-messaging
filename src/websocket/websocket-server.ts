@@ -3,6 +3,7 @@ import { WebSocketServer } from 'ws'
 
 import type { Message } from '../domain/index.js'
 import type { ConversationStore, MessageBus, TokenVerifier } from '../ports/index.js'
+import { ConnectionRateLimiter } from './connection-rate-limiter.js'
 import { ConnectionRegistry } from './connection-registry.js'
 
 export interface AttachWebSocketServerConfig {
@@ -10,6 +11,8 @@ export interface AttachWebSocketServerConfig {
   tokenVerifier: TokenVerifier
   conversations: ConversationStore
   messageBus: MessageBus
+  /** Defaults to 20 connection attempts per minute per source IP. */
+  connectionRateLimiter?: ConnectionRateLimiter
 }
 
 function extractToken(req: IncomingMessage): string | null {
@@ -52,9 +55,23 @@ async function deliverToParticipants(
 export function attachWebSocketServer(config: AttachWebSocketServerConfig): ConnectionRegistry {
   const registry = new ConnectionRegistry()
   const wss = new WebSocketServer({ noServer: true })
+  const rateLimiter = config.connectionRateLimiter ?? new ConnectionRateLimiter(20, 60_000)
 
   config.server.on('upgrade', (req, socket, head) => {
     void (async () => {
+      // remoteAddress is whatever sent the TCP connection - behind a
+      // reverse proxy or ingress that is the proxy, not the original
+      // client. Fine for a single hop; a deployment behind a proxy that
+      // needs the real client IP would read X-Forwarded-For instead,
+      // which this does not attempt since that means trusting whatever
+      // set that header.
+      const ip = req.socket.remoteAddress ?? 'unknown'
+      if (!rateLimiter.allow(ip)) {
+        socket.write('HTTP/1.1 429 Too Many Requests\r\n\r\n')
+        socket.destroy()
+        return
+      }
+
       const token = extractToken(req)
       if (!token) {
         socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')

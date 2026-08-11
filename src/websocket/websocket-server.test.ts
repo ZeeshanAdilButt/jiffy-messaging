@@ -6,6 +6,7 @@ import { WebSocket } from 'ws'
 import { InMemoryConversationStore } from '../adapters/in-memory/index.js'
 import { InProcessMessageBus } from '../adapters/in-process/index.js'
 import type { TokenVerifier, VerifiedIdentity } from '../ports/index.js'
+import { ConnectionRateLimiter } from './connection-rate-limiter.js'
 import { attachWebSocketServer } from './websocket-server.js'
 
 class FixedTokenVerifier implements TokenVerifier {
@@ -131,5 +132,46 @@ describe('attachWebSocketServer', () => {
     socket.close()
     await once(socket, 'close')
     await vi.waitFor(() => expect(registry.get('user_a').size).toBe(0))
+  })
+})
+
+describe('attachWebSocketServer connection rate limiting', () => {
+  let server: Server
+  let port: number
+  const openSockets: WebSocket[] = []
+
+  beforeEach(async () => {
+    server = createServer()
+    attachWebSocketServer({
+      server,
+      tokenVerifier: new FixedTokenVerifier(),
+      conversations: new InMemoryConversationStore(),
+      messageBus: new InProcessMessageBus(),
+      connectionRateLimiter: new ConnectionRateLimiter(1, 60_000),
+    })
+    port = await listen(server)
+  })
+
+  afterEach(async () => {
+    for (const socket of openSockets) {
+      socket.close()
+    }
+    openSockets.length = 0
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  })
+
+  function connect(token: string): WebSocket {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/?token=${token}`)
+    openSockets.push(socket)
+    return socket
+  }
+
+  it('rejects a connection attempt past the configured limit', async () => {
+    const first = connect('user_a')
+    await once(first, 'open')
+
+    const second = connect('user_a')
+    const [error] = await once(second, 'error')
+    expect(String(error)).toContain('429')
   })
 })
