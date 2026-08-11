@@ -16,10 +16,25 @@ services:
       timeout: 5s
       retries: 5
 
-  jiffy-messaging:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Two instances behind the same Postgres and Redis, on different host
+  # ports, so a message sent through one and delivered to a socket
+  # connected to the other is something you can actually see locally -
+  # that cross-instance path is the entire reason RedisMessageBus exists.
+  jiffy-messaging-a:
     build: .
-    environment:
+    environment: &app-environment
       DATABASE_URL: postgres://jiffy:jiffy@postgres:5432/jiffy_messaging
+      REDIS_URL: redis://redis:6379
       # Local dev only - never use a hardcoded secret like this outside a
       # throwaway compose environment.
       JWT_SECRET: local-dev-secret-do-not-use-in-production
@@ -28,6 +43,19 @@ services:
       - "8080:8080"
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  jiffy-messaging-b:
+    build: .
+    environment: *app-environment
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
 volumes:

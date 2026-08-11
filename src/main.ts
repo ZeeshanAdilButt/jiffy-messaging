@@ -1,8 +1,10 @@
 import { createRemoteJWKSet } from 'jose'
+import { Redis } from 'ioredis'
 import { Pool } from 'pg'
 import { pathToFileURL } from 'node:url'
 
 import { JwtTokenVerifier } from './adapters/jwt/index.js'
+import { RedisMessageBus } from './adapters/redis/index.js'
 import { createServer } from './server/create-server.js'
 
 export type JwtEnvConfig =
@@ -13,6 +15,8 @@ export interface ParsedEnv {
   databaseUrl: string
   port: number
   jwt: JwtEnvConfig
+  /** Unset means run as a single instance, using the in-process bus. */
+  redisUrl?: string
 }
 
 /**
@@ -35,16 +39,27 @@ export function parseEnv(env: NodeJS.ProcessEnv): ParsedEnv {
   const issuer = env.JWT_ISSUER
   const audience = env.JWT_AUDIENCE
   const userIdClaim = env.JWT_USER_ID_CLAIM
+  const redisUrl = env.REDIS_URL
 
   // JWT_JWKS_URI wins if both are set, since a platform that has moved to
   // rotating keys behind a JWKS endpoint has no reason to also keep a
   // static secret configured.
   if (env.JWT_JWKS_URI) {
-    return { databaseUrl, port, jwt: { kind: 'jwks', uri: env.JWT_JWKS_URI, issuer, audience, userIdClaim } }
+    return {
+      databaseUrl,
+      port,
+      redisUrl,
+      jwt: { kind: 'jwks', uri: env.JWT_JWKS_URI, issuer, audience, userIdClaim },
+    }
   }
 
   if (env.JWT_SECRET) {
-    return { databaseUrl, port, jwt: { kind: 'secret', secret: env.JWT_SECRET, issuer, audience, userIdClaim } }
+    return {
+      databaseUrl,
+      port,
+      redisUrl,
+      jwt: { kind: 'secret', secret: env.JWT_SECRET, issuer, audience, userIdClaim },
+    }
   }
 
   throw new Error('Set either JWT_JWKS_URI or JWT_SECRET')
@@ -71,16 +86,23 @@ export function run(): void {
   const config = parseEnv(process.env)
   const pool = new Pool({ connectionString: config.databaseUrl })
   const tokenVerifier = buildTokenVerifier(config.jwt)
-  const server = createServer({ pool, tokenVerifier })
+
+  // Two connections because a connection subscribed to a channel can't
+  // also issue publish or other commands - see RedisMessageBus.
+  const redisClients = config.redisUrl ? [new Redis(config.redisUrl), new Redis(config.redisUrl)] : []
+  const messageBus = redisClients.length > 0 ? new RedisMessageBus(redisClients[0]!, redisClients[1]!) : undefined
+
+  const server = createServer({ pool, tokenVerifier, messageBus })
 
   server.listen(config.port, () => {
-    console.log(`jiffy-messaging listening on port ${config.port}`)
+    const mode = messageBus ? 'multi-instance, via Redis' : 'single instance, in-process'
+    console.log(`jiffy-messaging listening on port ${config.port} (${mode})`)
   })
 
   const shutdown = (signal: string) => {
     console.log(`Received ${signal}, shutting down`)
     server.close(() => {
-      void pool.end().finally(() => process.exit(0))
+      void Promise.all([pool.end(), ...redisClients.map((client) => client.quit())]).finally(() => process.exit(0))
     })
   }
 

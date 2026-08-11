@@ -4,12 +4,19 @@ import type { Pool } from 'pg'
 import { InProcessMessageBus } from '../adapters/in-process/index.js'
 import { PostgresConversationStore, PostgresMessageStore } from '../adapters/postgres/index.js'
 import { createHttpApp } from '../http/index.js'
-import type { TokenVerifier } from '../ports/index.js'
+import type { MessageBus, TokenVerifier } from '../ports/index.js'
 import { attachWebSocketServer } from '../websocket/index.js'
 
 export interface CreateServerConfig {
   pool: Pool
   tokenVerifier: TokenVerifier
+  /**
+   * Defaults to InProcessMessageBus, correct for a single running
+   * instance. Pass a RedisMessageBus here to run more than one instance
+   * behind a load balancer and still have messages reach a recipient
+   * connected to a different one.
+   */
+  messageBus?: MessageBus
 }
 
 /**
@@ -26,7 +33,7 @@ export interface CreateServerConfig {
 export function createServer(config: CreateServerConfig): Server {
   const conversations = new PostgresConversationStore(config.pool)
   const messages = new PostgresMessageStore(config.pool)
-  const messageBus = new InProcessMessageBus()
+  const messageBus = config.messageBus ?? new InProcessMessageBus()
 
   const app = createHttpApp({
     conversations,

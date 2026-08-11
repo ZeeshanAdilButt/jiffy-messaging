@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
 import type { Pool } from 'pg'
 
-import type { TokenVerifier, VerifiedIdentity } from '../ports/index.js'
+import type { MessageBus, TokenVerifier, VerifiedIdentity } from '../ports/index.js'
 import { createServer } from './create-server.js'
 
 class FixedTokenVerifier implements TokenVerifier {
@@ -59,5 +59,20 @@ describe('createServer', () => {
     } finally {
       socket.close()
     }
+  })
+
+  it('wires a supplied message bus into the WebSocket layer instead of the default', () => {
+    let subscribedHandlerCount = 0
+    const bus: MessageBus = {
+      async publish() {},
+      onMessage(_handler) {
+        subscribedHandlerCount += 1
+        return () => {}
+      },
+    }
+
+    server = createServer({ pool: fakePool(), tokenVerifier: new FixedTokenVerifier(), messageBus: bus })
+
+    expect(subscribedHandlerCount).toBe(1)
   })
 })

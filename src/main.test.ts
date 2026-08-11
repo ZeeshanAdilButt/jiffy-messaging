@@ -60,6 +60,15 @@ describe('parseEnv', () => {
       userIdClaim: 'platformUserId',
     })
   })
+
+  it('leaves redisUrl unset when REDIS_URL is not set', () => {
+    expect(parseEnv(BASE_ENV).redisUrl).toBeUndefined()
+  })
+
+  it('carries redisUrl through when REDIS_URL is set', () => {
+    const config = parseEnv({ ...BASE_ENV, REDIS_URL: 'redis://localhost:6379' })
+    expect(config.redisUrl).toBe('redis://localhost:6379')
+  })
 })
 
 describe('buildTokenVerifier', () => {
