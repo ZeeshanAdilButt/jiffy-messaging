@@ -22,6 +22,10 @@ export class MessagingService {
     return this.requireParticipant(conversationId, requesterId)
   }
 
+  async listConversations(userId: string): Promise<Conversation[]> {
+    return this.conversations.findByParticipant(userId)
+  }
+
   async sendMessage(input: SendMessageInput): Promise<Message> {
     if (input.body.trim().length === 0) {
       throw new EmptyMessageError()

@@ -1,0 +1,31 @@
+import express, { type Express } from 'express'
+
+import { MessagingService } from '../core/index.js'
+import type { ConversationStore, MessageStore, TokenVerifier } from '../ports/index.js'
+import { createAuthMiddleware } from './auth-middleware.js'
+import { createConversationsRouter } from './conversations-router.js'
+import { errorHandler } from './error-handler.js'
+
+export interface HttpAppConfig {
+  conversations: ConversationStore
+  messages: MessageStore
+  tokenVerifier: TokenVerifier
+}
+
+/**
+ * Assembles the REST surface over the core service. This only builds the
+ * Express app - binding it to a port is the standalone server's job, so
+ * the same app can be tested with supertest or mounted in a bigger
+ * process without ever calling listen().
+ */
+export function createHttpApp(config: HttpAppConfig): Express {
+  const messaging = new MessagingService(config.conversations, config.messages)
+
+  const app = express()
+  app.use(express.json())
+  app.use(createAuthMiddleware(config.tokenVerifier))
+  app.use(createConversationsRouter(messaging))
+  app.use(errorHandler)
+
+  return app
+}

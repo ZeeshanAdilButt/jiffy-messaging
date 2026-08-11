@@ -17,6 +17,20 @@ describe('MessagingService', () => {
     })
   })
 
+  describe('listConversations', () => {
+    it('returns only the conversations the user participates in', async () => {
+      const withUser = await service.createConversation(['a', 'b'])
+      await service.createConversation(['b', 'c'])
+
+      const conversations = await service.listConversations('a')
+      expect(conversations.map((c) => c.id)).toEqual([withUser.id])
+    })
+
+    it('returns an empty array for a user in no conversations', async () => {
+      await expect(service.listConversations('nobody')).resolves.toEqual([])
+    })
+  })
+
   describe('sendMessage', () => {
     it('sends a message from a participant', async () => {
       const conversation = await service.createConversation(['a', 'b'])
