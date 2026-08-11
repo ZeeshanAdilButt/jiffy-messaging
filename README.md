@@ -16,8 +16,13 @@ Which mode you use is a deployment decision, not a code change. See
 
 ## Status
 
-Phase 12 of 20. Core, storage adapters, HTTP, WebSocket, and the
-standalone server are done; see [PHASES.md](./PHASES.md) for what's left.
+Phase 19 of 20. See [PHASES.md](./PHASES.md) for what's left.
+
+## Releasing
+
+Pushing a tag matching `v*` builds and pushes a container image to GHCR
+and publishes the npm package, via `.github/workflows/release.yml`.
+Publishing to npm needs an `NPM_TOKEN` repo secret; nothing else does.
 
 ## License
 
