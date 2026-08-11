@@ -16,7 +16,8 @@ Which mode you use is a deployment decision, not a code change. See
 
 ## Status
 
-Early. Phase 1 of 20.
+Phase 12 of 20. Core, storage adapters, HTTP, WebSocket, and the
+standalone server are done; see [PHASES.md](./PHASES.md) for what's left.
 
 ## License
 
