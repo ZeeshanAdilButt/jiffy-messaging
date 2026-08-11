@@ -8,6 +8,20 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: jiffy
+          POSTGRES_PASSWORD: jiffy
+          POSTGRES_DB: jiffy_messaging
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jiffy"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -24,4 +38,7 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      - run: pnpm test:integration
+        env:
+          DATABASE_URL: postgres://jiffy:jiffy@localhost:5432/jiffy_messaging
       - run: pnpm build
