@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { InMemoryConversationStore, InMemoryMessageStore } from '../adapters/in-memory/index.js'
+import type { Message } from '../domain/index.js'
+import type { MessageBus } from '../ports/index.js'
 import { ConversationNotFoundError, EmptyMessageError, MessagingService, NotAParticipantError } from './index.js'
 
 describe('MessagingService', () => {
@@ -43,6 +45,41 @@ describe('MessagingService', () => {
       await expect(
         service.sendMessage({ conversationId: conversation.id, senderId: 'a', body: '   ' }),
       ).rejects.toThrow(EmptyMessageError)
+    })
+
+    it('publishes the message to the configured message bus', async () => {
+      const published: Message[] = []
+      const bus: MessageBus = {
+        async publish(message) {
+          published.push(message)
+        },
+        onMessage() {
+          return () => {}
+        },
+      }
+      const busService = new MessagingService(new InMemoryConversationStore(), new InMemoryMessageStore(), bus)
+      const conversation = await busService.createConversation(['a', 'b'])
+
+      const message = await busService.sendMessage({ conversationId: conversation.id, senderId: 'a', body: 'hi' })
+
+      expect(published).toEqual([message])
+    })
+
+    it('still returns the message when the bus publish rejects', async () => {
+      const bus: MessageBus = {
+        async publish() {
+          throw new Error('bus unavailable')
+        },
+        onMessage() {
+          return () => {}
+        },
+      }
+      const busService = new MessagingService(new InMemoryConversationStore(), new InMemoryMessageStore(), bus)
+      const conversation = await busService.createConversation(['a', 'b'])
+
+      await expect(
+        busService.sendMessage({ conversationId: conversation.id, senderId: 'a', body: 'hi' }),
+      ).resolves.toMatchObject({ body: 'hi' })
     })
 
     it('rejects a sender who is not a participant', async () => {
