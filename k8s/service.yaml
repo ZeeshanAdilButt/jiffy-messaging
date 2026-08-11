@@ -1,0 +1,19 @@
+# Plain ClusterIP over HTTP. A client's WebSocket connection stays on
+# whichever pod the Service routes it to for the life of that connection -
+# nothing here does or needs to do anything special for that. What lets a
+# message sent through one pod reach a client connected to another is
+# RedisMessageBus, not any load-balancing configuration on this Service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: jiffy-messaging
+  labels:
+    app: jiffy-messaging
+spec:
+  selector:
+    app: jiffy-messaging
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  type: ClusterIP

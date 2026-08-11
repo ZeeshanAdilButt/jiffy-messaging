@@ -1,0 +1,13 @@
+# Non-secret configuration. DATABASE_URL, REDIS_URL, and JWT_SECRET (or
+# JWT_JWKS_URI) live in the Secret instead - see secret.yaml.example.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jiffy-messaging-config
+data:
+  PORT: "8080"
+  # Uncomment and set these if the host platform's tokens carry a
+  # non-default issuer, audience, or user id claim.
+  # JWT_ISSUER: ""
+  # JWT_AUDIENCE: ""
+  # JWT_USER_ID_CLAIM: ""
