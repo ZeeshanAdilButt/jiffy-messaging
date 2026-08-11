@@ -40,6 +40,10 @@ export function createServer(config: CreateServerConfig): Server {
     messages,
     tokenVerifier: config.tokenVerifier,
     messageBus,
+    readinessCheck: async () => {
+      await config.pool.query('SELECT 1')
+      return true
+    },
   })
 
   const server = createHttpServer(app)

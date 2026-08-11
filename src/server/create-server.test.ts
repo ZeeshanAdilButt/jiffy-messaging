@@ -21,11 +21,11 @@ class FixedTokenVerifier implements TokenVerifier {
 // WebSocket layers are actually wired onto the returned server, not that
 // the Postgres adapter talks to a real database. That is covered by the
 // postgres adapter's own tests.
-function fakePool(): Pool {
+function fakePool(queryImpl: () => Promise<unknown> = async () => ({ rows: [] })): Pool {
   return {
-    query: async () => ({ rows: [] }),
+    query: queryImpl,
     connect: async () => ({
-      query: async () => ({ rows: [] }),
+      query: queryImpl,
       release: () => {},
     }),
   } as unknown as Pool
@@ -74,5 +74,20 @@ describe('createServer', () => {
     server = createServer({ pool: fakePool(), tokenVerifier: new FixedTokenVerifier(), messageBus: bus })
 
     expect(subscribedHandlerCount).toBe(1)
+  })
+
+  it('reports ready when the pool query succeeds', async () => {
+    server = createServer({ pool: fakePool(), tokenVerifier: new FixedTokenVerifier() })
+    const res = await request(server).get('/ready')
+    expect(res.status).toBe(200)
+  })
+
+  it('reports not ready when the pool query fails', async () => {
+    const failingPool = fakePool(async () => {
+      throw new Error('connection refused')
+    })
+    server = createServer({ pool: failingPool, tokenVerifier: new FixedTokenVerifier() })
+    const res = await request(server).get('/ready')
+    expect(res.status).toBe(503)
   })
 })

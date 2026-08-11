@@ -32,3 +32,19 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
+          # /health never checks dependencies, so a slow or briefly down
+          # database does not get this pod killed and restarted for no
+          # reason. /ready does check the database, so a pod in that state
+          # stops receiving traffic without being restarted.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10

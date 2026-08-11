@@ -5,6 +5,7 @@ import type { ConversationStore, MessageBus, MessageStore, TokenVerifier } from 
 import { createAuthMiddleware } from './auth-middleware.js'
 import { createConversationsRouter } from './conversations-router.js'
 import { errorHandler } from './error-handler.js'
+import { createHealthRouter } from './health-router.js'
 
 export interface HttpAppConfig {
   conversations: ConversationStore
@@ -17,6 +18,8 @@ export interface HttpAppConfig {
    * for an HTTP-only deployment with no real-time delivery.
    */
   messageBus?: MessageBus
+  /** See createHealthRouter - backs GET /ready. */
+  readinessCheck?: () => Promise<boolean>
 }
 
 /**
@@ -30,6 +33,10 @@ export function createHttpApp(config: HttpAppConfig): Express {
 
   const app = express()
   app.use(express.json())
+  // Health and readiness are unauthenticated and sit before the auth
+  // middleware for that reason - a load balancer or kubelet probing them
+  // has no bearer token to send.
+  app.use(createHealthRouter({ readinessCheck: config.readinessCheck }))
   app.use(createAuthMiddleware(config.tokenVerifier))
   app.use(createConversationsRouter(messaging))
   app.use(errorHandler)

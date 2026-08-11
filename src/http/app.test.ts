@@ -47,6 +47,13 @@ describe('HTTP app', () => {
       const res = await request(app).get('/conversations').set('Authorization', 'Bearer garbage')
       expect(res.status).toBe(401)
     })
+
+    it('does not require auth for /health or /ready', async () => {
+      const healthRes = await request(app).get('/health')
+      const readyRes = await request(app).get('/ready')
+      expect(healthRes.status).toBe(200)
+      expect(readyRes.status).toBe(200)
+    })
   })
 
   describe('POST /conversations', () => {

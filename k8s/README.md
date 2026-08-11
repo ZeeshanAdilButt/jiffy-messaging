@@ -3,8 +3,10 @@
 Deployment, Service, ConfigMap, a Secret template, and a
 HorizontalPodAutoscaler for running jiffy-messaging in a cluster.
 
-No health or readiness probes yet - those come with the endpoints they
-check against, added in a later phase alongside these manifests.
+The Deployment's liveness and readiness probes hit /health and /ready.
+/health never checks a dependency, so a slow database doesn't get a pod
+killed and restarted for no reason; /ready does check the database, so a
+pod in that state stops receiving traffic without being restarted.
 
 ## Usage
 
