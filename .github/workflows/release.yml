@@ -66,9 +66,24 @@ jobs:
       - run: pnpm test
       - run: pnpm build
 
-      # NPM_TOKEN must be added as a repo secret before this step will
-      # actually publish - an automation token with publish rights from
-      # npmjs.com, added under Settings > Secrets and variables > Actions.
-      - run: pnpm publish --no-git-checks --provenance
+      # The image half of a release needs no secret, so a missing
+      # NPM_TOKEN shouldn't fail the run - it just means this repo isn't
+      # publishing to npm yet. Add the secret and the next tag picks it
+      # up. The secrets context isn't available in a job-level `if`,
+      # hence checking it here as a step.
+      - name: Check for npm credentials
+        id: npm_credentials
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::NPM_TOKEN is not set, skipping npm publish. The container image still published."
+          fi
+
+      - if: steps.npm_credentials.outputs.present == 'true'
+        run: pnpm publish --no-git-checks --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
