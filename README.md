@@ -55,6 +55,7 @@ not care whether it is a function call or an HTTP request.
 - [WebSocket](#websocket)
 - [Configuration](#configuration)
 - [Running more than one instance](#running-more-than-one-instance)
+- [Production deployment](#production-deployment)
 - [Kubernetes](#kubernetes)
 - [Architecture](#architecture)
 - [Development](#development)
@@ -207,6 +208,25 @@ handled the send. Everything else is unchanged.
 
 Rate limiting stays per instance — each enforces its own counters, so the
 effective limit is the configured limit times the instance count.
+
+## Production deployment
+
+[docs/deployment.md](./docs/deployment.md) covers running the published
+image on a single host: giving the service a database of its own, what
+every environment variable actually does, and the reverse proxy in front
+of it. Read the proxy section before writing one. A proxy that does not
+forward the WebSocket upgrade leaves the REST API working and silently
+kills live delivery, and nothing in the logs says so.
+
+[docs/preflight-checklist.md](./docs/preflight-checklist.md) is the
+ordered list for a first deploy, with what to verify after each step and
+how to undo it.
+
+```
+cp .env.example .env
+# fill in real values
+docker compose -f docker-compose.prod.yml up -d
+```
 
 ## Kubernetes
 

@@ -1,0 +1,57 @@
+# Production. The root docker-compose.yml is the development environment:
+# it builds from source, runs a throwaway Postgres and Redis, hardcodes a
+# dev secret, and starts two instances to make cross-instance delivery
+# visible locally. None of that belongs here.
+#
+# This runs one published image against a database and a secret you
+# already have. See docs/deployment.md.
+#
+#   cp .env.example .env    # fill in real values
+#   docker compose -f docker-compose.prod.yml up -d
+
+services:
+  jiffy-messaging:
+    # Pinned to a full version on purpose. `latest` moving under a host
+    # that pulls on restart is how a release you did not intend to deploy
+    # ends up in production.
+    image: ghcr.io/zeeshanadilbutt/jiffy-messaging:0.1.0
+    restart: unless-stopped
+
+    # Every value comes from .env, which is gitignored. Nothing
+    # configurable is written into this file.
+    env_file:
+      - .env
+
+    # Loopback only. The service terminates no TLS of its own and its
+    # /metrics endpoint is unauthenticated, so the reverse proxy should be
+    # the only thing that can reach it. Change the host port on the left
+    # if 8080 is taken; leave the container port alone, since the
+    # healthcheck below and the image's EXPOSE both assume it.
+    ports:
+      - "127.0.0.1:8080:8080"
+
+    # /ready checks the database, which is what makes it the right probe
+    # for "can this container actually serve traffic". /health would pass
+    # with an unreachable database. Uses node rather than curl or wget
+    # because node is the one binary the image is guaranteed to have.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          node -e "fetch('http://127.0.0.1:8080/ready').then(r =>
+          process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    # JSON on stdout, one line per request, so cap it. There is no log
+    # rotation inside the container.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+# Running more than one instance needs REDIS_URL set on every one of them,
+# or a message sent through one never reaches a client holding a socket on
+# another. See docs/deployment.md#more-than-one-instance.
