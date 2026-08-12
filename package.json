@@ -43,6 +43,7 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "start": "node dist/main.js",
+    "schema:apply": "node scripts/apply-schema.mjs",
     "typecheck": "tsc --noEmit && tsc --noEmit -p examples/tsconfig.json",
     "lint": "eslint .",
     "format": "prettier --check .",

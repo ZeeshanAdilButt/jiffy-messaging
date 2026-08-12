@@ -1,0 +1,111 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One deploy at a time, and never cancel one that is already running. A
+# cancelled run drops the SSH session mid-install and takes the deploy
+# script's rollback with it, which is the one state this is built to avoid.
+concurrency:
+  group: jiffy-messaging-deploy-vps
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Configuration lives in GitHub rather than on the box, so a rebuilt
+      # VPS needs a git clone and nothing hand written. The file is
+      # assembled and checked here, before anything touches the host, so a
+      # missing or malformed secret fails the run instead of overwriting a
+      # working .env with a broken one.
+      #
+      # It travels base64 encoded because the value has to survive cmd and
+      # PowerShell quoting on the way in. The blob is masked before it is
+      # used anywhere, so the SSH step's command echo shows *** rather than
+      # the secret.
+      - name: Assemble the environment file
+        id: envfile
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          JWT_ISSUER: ${{ vars.JWT_ISSUER }}
+          JWT_AUDIENCE: ${{ vars.JWT_AUDIENCE }}
+          JWT_USER_ID_CLAIM: ${{ vars.JWT_USER_ID_CLAIM }}
+          LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+        run: |
+          set -euo pipefail
+
+          names="DATABASE_URL JWT_SECRET JWT_ISSUER JWT_AUDIENCE JWT_USER_ID_CLAIM REDIS_URL LOG_LEVEL"
+
+          missing=""
+          for name in DATABASE_URL JWT_SECRET; do
+            if [ -z "${!name}" ]; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required repository secret(s):$missing. See docs/vps-deploy.md."
+            exit 1
+          fi
+
+          # Values are written double quoted, which is what node --env-file
+          # and the deploy script's own parser both read literally. Neither
+          # format can carry a double quote or a newline inside a value, so
+          # reject those here rather than shipping a file that parses into
+          # something else.
+          for name in $names; do
+            value="${!name}"
+            case "$value" in
+              *'"'*)
+                echo "::error::$name contains a double quote, which the environment file cannot carry. Change the value."
+                exit 1
+                ;;
+            esac
+            if [ "$(printf '%s' "$value" | wc -l)" -ne 0 ]; then
+              echo "::error::$name contains a newline, which the environment file cannot carry. Check for a stray line break when the secret was pasted."
+              exit 1
+            fi
+          done
+
+          # PORT is fixed rather than configurable: docs/deployment.md, the
+          # compose file, the k8s probes, and the deploy script's readiness
+          # probe all assume 8080, and nothing on this host competes for it.
+          # The platform API is on 4000.
+          : > env.incoming
+          printf 'PORT="8080"\n' >> env.incoming
+          for name in $names; do
+            if [ -n "${!name}" ]; then
+              printf '%s="%s"\n' "$name" "${!name}" >> env.incoming
+            fi
+          done
+
+          blob="$(base64 -w 0 env.incoming)"
+          echo "::add-mask::$blob"
+          echo "value=$blob" >> "$GITHUB_OUTPUT"
+          echo "Wrote $(wc -l < env.incoming) variables."
+
+      # Pinned to the same action and version the platform API deploys to
+      # this host with, since that is the combination known to work against
+      # its OpenSSH server.
+      #
+      # The command mirrors the API's: fix up PATH, which a non-interactive
+      # SSH session does not inherit, drop the new configuration next to the
+      # checkout, record the commit currently deployed so the script can put
+      # it back, fast forward to origin/main, and hand over to the script
+      # that the reset just updated. `exit $LASTEXITCODE` is what carries a
+      # failed deploy back out to the workflow.
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: 22
+          command_timeout: 12m
+          script: |
+            powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User'); Set-Location C:\app\jiffy-messaging; [IO.File]::WriteAllBytes('C:\app\jiffy-messaging\.env.incoming', [Convert]::FromBase64String('${{ steps.envfile.outputs.value }}')); if (-not (Test-Path C:\app\jiffy-messaging\.env.incoming)) { Write-Host 'FAILED: could not write .env.incoming'; exit 90 }; $prev = (git rev-parse HEAD); git fetch --all 2>&1 | Out-Null; if ($LASTEXITCODE -ne 0) { Write-Host 'FAILED: git fetch, nothing was changed'; exit 91 }; git reset --hard origin/main 2>&1 | Out-Null; if ($LASTEXITCODE -ne 0) { Write-Host 'FAILED: git reset, nothing was changed'; exit 92 }; & C:\app\jiffy-messaging\scripts\deploy.ps1 -PreviousCommit $prev; exit $LASTEXITCODE"
