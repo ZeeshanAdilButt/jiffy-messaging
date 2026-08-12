@@ -69,7 +69,7 @@ describe('JwtTokenVerifier', () => {
   })
 
   it('rejects a token missing the user id claim', async () => {
-    const token = await signToken({ role: 'mentor' })
+    const token = await signToken({ role: 'admin' })
     const verifier = new JwtTokenVerifier(secret)
 
     await expect(verifier.verify(token)).rejects.toThrow(InvalidTokenError)
@@ -79,11 +79,11 @@ describe('JwtTokenVerifier', () => {
     const token = await new SignJWT({ sub: 'user_1' })
       .setProtectedHeader({ alg: 'HS256' })
       .setIssuedAt()
-      .setIssuer('goalslot')
+      .setIssuer('example-platform')
       .setAudience('jiffy-messaging')
       .sign(secret)
 
-    const verifier = new JwtTokenVerifier(secret, { issuer: 'goalslot', audience: 'jiffy-messaging' })
+    const verifier = new JwtTokenVerifier(secret, { issuer: 'example-platform', audience: 'jiffy-messaging' })
     await expect(verifier.verify(token)).resolves.toEqual({ userId: 'user_1' })
   })
 })

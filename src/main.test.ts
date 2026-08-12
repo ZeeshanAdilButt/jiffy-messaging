@@ -50,12 +50,12 @@ describe('parseEnv', () => {
   it('carries issuer, audience, and userIdClaim through when set', () => {
     const config = parseEnv({
       ...BASE_ENV,
-      JWT_ISSUER: 'goalslot',
+      JWT_ISSUER: 'example-platform',
       JWT_AUDIENCE: 'jiffy-messaging',
       JWT_USER_ID_CLAIM: 'platformUserId',
     })
     expect(config.jwt).toMatchObject({
-      issuer: 'goalslot',
+      issuer: 'example-platform',
       audience: 'jiffy-messaging',
       userIdClaim: 'platformUserId',
     })

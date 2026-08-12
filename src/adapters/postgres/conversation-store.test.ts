@@ -4,9 +4,9 @@ import type { Pool } from 'pg'
 import { PostgresConversationStore } from './conversation-store.js'
 
 // These exercise query construction and row mapping against a fake pg
-// client, not a real database - that comes later with the integration
-// tests phase. A fake is enough to pin down parameter order and the
-// BEGIN/COMMIT/ROLLBACK shape of the create transaction.
+// client. A fake is enough to pin down parameter order and the
+// BEGIN/COMMIT/ROLLBACK shape of the create transaction; src/integration
+// covers the same code against a real database.
 class FakeClient {
   queries: { text: string; params?: unknown[] }[] = []
 

@@ -1,7 +1,25 @@
 {
   "name": "jiffy-messaging",
   "version": "0.1.0",
-  "description": "Messaging between users of a host platform, gated by a relationship the host platform decides. Runs embedded as a package or standalone as a container.",
+  "description": "Conversations and messages between users. Embed it as a package or run it as an HTTP and WebSocket service.",
+  "keywords": [
+    "messaging",
+    "chat",
+    "conversations",
+    "websocket",
+    "realtime",
+    "postgres",
+    "microservice",
+    "typescript"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZeeshanAdilButt/jiffy-messaging.git"
+  },
+  "homepage": "https://github.com/ZeeshanAdilButt/jiffy-messaging#readme",
+  "bugs": {
+    "url": "https://github.com/ZeeshanAdilButt/jiffy-messaging/issues"
+  },
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.cjs",

@@ -1,26 +1,71 @@
-# jiffy-messaging
+<h1 align="center">jiffy-messaging</h1>
 
-Messaging between two users of a host platform, where the host platform
-decides who is allowed to talk to whom. jiffy-messaging does not know what
-a mentor or a mentee is. It knows that some external system granted user A
-a conversation with user B, and it takes that grant as given.
+<p align="center">
+  Conversations and messages between users, for services that need
+  messaging without owning it.
+</p>
 
-It can run two ways from the same core:
+<p align="center">
+  <a href="https://github.com/ZeeshanAdilButt/jiffy-messaging/actions/workflows/ci.yml">
+    <img alt="CI" src="https://github.com/ZeeshanAdilButt/jiffy-messaging/actions/workflows/ci.yml/badge.svg">
+  </a>
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white">
+  <img alt="Node" src="https://img.shields.io/badge/node-%3E%3D20-5FA04E?logo=node.js&logoColor=white">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-blue">
+</p>
 
-- **Embedded**, as an npm package inside another Node process, called
-  directly with no network hop.
-- **Standalone**, as its own HTTP and WebSocket service, in a container.
+jiffy-messaging holds no opinion about who is allowed to talk to whom. Your
+service decides that and creates the conversation; from then on this
+handles storage, authorization against the conversation's participants,
+history, read state, and live delivery.
 
-Which mode you use is a deployment decision, not a code change. Both sides
-share the same core service and the same storage and auth ports - see
-[Architecture](#architecture) below and [PHASES.md](./PHASES.md) for how
-this was built, in order.
+It runs two ways from one core:
+
+```
+   embed it                              or run it
+┌──────────────────┐              ┌──────────────────────┐
+│  your service    │              │  your service        │
+│  ┌────────────┐  │              └──────────┬───────────┘
+│  │   jiffy    │  │                REST + WebSocket
+│  └─────┬──────┘  │              ┌──────────▼───────────┐
+└────────┼─────────┘              │  jiffy-messaging     │
+         │                        └──────────┬───────────┘
+    ┌────▼─────┐                        ┌────▼─────┐
+    │ Postgres │                        │ Postgres │  + Redis
+    └──────────┘                        └──────────┘   (multi-instance)
+```
+
+Same core, same ports, same behavior. Which one you use is a deployment
+choice, not a rewrite.
+
+## Why
+
+Messaging is one of those features that looks small until you build it:
+participant checks on every read and write, pagination, read state,
+delivering to a client connected to a different replica than the one that
+handled the send. This packages that once, behind an interface that does
+not care whether it is a function call or an HTTP request.
+
+## Contents
+
+- [Install](#install)
+- [Embedded usage](#embedded-usage)
+- [Standalone usage](#standalone-usage)
+- [HTTP API](#http-api)
+- [WebSocket](#websocket)
+- [Configuration](#configuration)
+- [Running more than one instance](#running-more-than-one-instance)
+- [Kubernetes](#kubernetes)
+- [Architecture](#architecture)
+- [Development](#development)
 
 ## Install
 
 ```
 npm install jiffy-messaging
 ```
+
+Or run it as a service — see [Standalone usage](#standalone-usage).
 
 ## Embedded usage
 
@@ -34,124 +79,184 @@ import { Pool } from 'pg'
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
-const embedded = createEmbeddedMessaging({
+const messaging = createEmbeddedMessaging({
   conversations: new PostgresConversationStore(pool),
   messages: new PostgresMessageStore(pool),
-  tokenVerifier: myTokenVerifier, // whatever verifies your platform's own tokens
+  tokenVerifier: myTokenVerifier, // verifies your service's own tokens
 })
 
-const conversation = await embedded.messaging.createConversation(['mentor_1', 'mentee_1'])
-await embedded.messaging.sendMessage({
+const conversation = await messaging.messaging.createConversation(['user_1', 'user_2'])
+
+await messaging.messaging.sendMessage({
   conversationId: conversation.id,
-  senderId: 'mentor_1',
-  body: 'How did the last session go?',
+  senderId: 'user_1',
+  body: 'Hello',
 })
+
+const history = await messaging.messaging.listMessages(conversation.id, 'user_2', { limit: 50 })
+await messaging.messaging.markRead(conversation.id, 'user_2', new Date())
 ```
 
-A runnable version of this, using in-memory adapters so it needs nothing
-else running, is in [examples/embedded.ts](./examples/embedded.ts):
+Every call after `createConversation` verifies the acting user is a
+participant, and throws `NotAParticipantError` if not.
+
+A runnable version using in-memory adapters, so it needs no database:
 
 ```
-pnpm example:embedded
+make example-embedded
 ```
 
 ## Standalone usage
 
 ```
-docker compose up
+make up
 ```
 
-brings up Postgres, Redis, and two instances of the service on ports 8080
-and 8081 (see [docker-compose.yml](./docker-compose.yml)). From there it's
-a REST API plus a WebSocket for live delivery:
-
-| Method | Path                          | Does                                    |
-| ------ | ----------------------------- | ---------------------------------------- |
-| POST   | /conversations                | Create a conversation                    |
-| GET    | /conversations                | List the caller's conversations          |
-| GET    | /conversations/:id            | Get one conversation                     |
-| POST   | /conversations/:id/messages   | Send a message                           |
-| GET    | /conversations/:id/messages   | List messages (`?limit=`, `?before=`)    |
-| POST   | /conversations/:id/read       | Mark the conversation read               |
-| GET    | /health                       | Liveness, no dependency checks           |
-| GET    | /ready                        | Readiness, checks the database           |
-| GET    | /metrics                      | Prometheus metrics                       |
-
-Every route above the health/metrics group needs `Authorization: Bearer
-<token>`. Connect to the WebSocket at `ws://host:port/?token=<token>` -
-the token travels as a query parameter since browsers cannot set custom
-headers on a WebSocket handshake. A connected client receives every new
-message in a conversation it participates in, pushed as JSON.
-
-A runnable version of the REST-plus-WebSocket flow above is in
-[examples/networked.ts](./examples/networked.ts):
+Brings up Postgres, Redis, and two service instances on ports 8080 and
+8081. Or run the published image directly:
 
 ```
-pnpm example:networked
+docker run -p 8080:8080 \
+  -e DATABASE_URL=postgres://user:pass@host:5432/jiffy_messaging \
+  -e JWT_SECRET=your-secret \
+  ghcr.io/zeeshanadilbutt/jiffy-messaging:latest
 ```
+
+Apply [src/adapters/postgres/schema.sql](./src/adapters/postgres/schema.sql)
+to your database once before first run.
+
+A runnable client exercising the REST and WebSocket flow end to end:
+
+```
+make example-networked
+```
+
+## HTTP API
+
+Every route below takes `Authorization: Bearer <token>`, verified through
+the `TokenVerifier` your deployment configures.
+
+| Method | Path                        | Body / query                        | Returns             |
+| ------ | --------------------------- | ----------------------------------- | ------------------- |
+| POST   | /conversations              | `{ participantIds: string[] }`      | 201, conversation   |
+| GET    | /conversations              |                                     | 200, conversation[] |
+| GET    | /conversations/:id          |                                     | 200, conversation   |
+| POST   | /conversations/:id/messages | `{ body: string }`                  | 201, message        |
+| GET    | /conversations/:id/messages | `?limit=50&before=<ISO date>`       | 200, message[]      |
+| POST   | /conversations/:id/read     |                                     | 204                 |
+
+Errors: 400 malformed input, 401 missing or invalid token, 403 not a
+participant, 404 unknown conversation, 429 rate limited.
+
+Unauthenticated operational routes:
+
+| Method | Path     | Purpose                                        |
+| ------ | -------- | ---------------------------------------------- |
+| GET    | /health  | Liveness. No dependency checks                 |
+| GET    | /ready   | Readiness. Checks the database, 503 if not     |
+| GET    | /metrics | Prometheus metrics                             |
+
+## WebSocket
+
+```
+ws://host:8080/?token=<token>
+```
+
+The token travels as a query parameter because browsers cannot set custom
+headers on a WebSocket handshake. It is verified during the upgrade — an
+unauthenticated caller never gets an open socket.
+
+A connected client receives every new message in every conversation it
+participates in, pushed as JSON:
+
+```json
+{
+  "id": "...",
+  "conversationId": "...",
+  "senderId": "user_1",
+  "body": "Hello",
+  "createdAt": "2026-01-01T00:00:00.000Z"
+}
+```
+
+Delivery is push-only; send messages over the REST API.
 
 ## Configuration
 
-Read by `src/main.ts` (the standalone server), all as environment
-variables:
+| Variable            | Required         | Purpose                                                      |
+| ------------------- | ---------------- | ------------------------------------------------------------ |
+| `DATABASE_URL`      | yes              | Postgres connection string                                   |
+| `JWT_SECRET`        | one of these two | HMAC secret for token verification                           |
+| `JWT_JWKS_URI`      |                  | JWKS endpoint for token verification, wins if both are set   |
+| `PORT`              |                  | Defaults to 8080                                             |
+| `JWT_ISSUER`        |                  | Expected `iss` claim, if your tokens set one                 |
+| `JWT_AUDIENCE`      |                  | Expected `aud` claim, if your tokens set one                 |
+| `JWT_USER_ID_CLAIM` |                  | Claim holding the user id, defaults to `sub`                 |
+| `REDIS_URL`         |                  | Required to run more than one instance, see below            |
+| `LOG_LEVEL`         |                  | Defaults to `info`                                           |
 
-| Variable            | Required | Purpose                                                             |
-| -------------------- | -------- | --------------------------------------------------------------------- |
-| `DATABASE_URL`       | yes      | Postgres connection string                                          |
-| `JWT_SECRET`         | one of these two | HMAC secret for token verification                          |
-| `JWT_JWKS_URI`       |          | JWKS endpoint for token verification (wins if both are set)         |
-| `PORT`               |          | Defaults to 8080                                                    |
-| `JWT_ISSUER`         |          | Expected `iss` claim, if the platform sets one                      |
-| `JWT_AUDIENCE`       |          | Expected `aud` claim, if the platform sets one                      |
-| `JWT_USER_ID_CLAIM`  |          | Claim holding the user id, defaults to `sub`                        |
-| `REDIS_URL`          |          | Unset runs a single instance; set to run more than one (see below)  |
-| `LOG_LEVEL`          |          | Defaults to `info`                                                  |
+## Running more than one instance
+
+A WebSocket client is connected to exactly one instance. Without a shared
+bus, a message sent through instance A never reaches a client holding a
+socket on instance B.
+
+Set `REDIS_URL` and instances publish to a shared Redis channel instead of
+an in-process emitter, so delivery works regardless of which instance
+handled the send. Everything else is unchanged.
+
+Rate limiting stays per instance — each enforces its own counters, so the
+effective limit is the configured limit times the instance count.
+
+## Kubernetes
+
+Deployment, Service, ConfigMap, Secret template, and HPA are in
+[k8s/](./k8s/README.md).
+
+```
+make k8s-validate     # client-side validation, no cluster needed
+make k8s-deploy       # applies k8s/ to the current context
+```
 
 ## Architecture
 
-Ports and adapters. The core (`src/core`, `src/domain`) has no framework
-or database dependency - it depends only on the interfaces in `src/ports`,
-never a concrete implementation:
+Ports and adapters. The core (`src/core`, `src/domain`) has no framework or
+database dependency — it depends only on interfaces in `src/ports`:
 
-- `ConversationStore` / `MessageStore` - persistence. Implemented by
-  `src/adapters/in-memory` (tests, examples) and `src/adapters/postgres`
-  (real use).
-- `TokenVerifier` - authentication. Implemented by `src/adapters/jwt`
-  against whatever platform is embedding or calling this service.
-- `MessageBus` - real-time delivery. Implemented by
-  `src/adapters/in-process` (single instance) and `src/adapters/redis`
-  (more than one instance behind a load balancer - a message published on
-  one instance still reaches a client connected to another).
+| Port                              | Purpose            | Implementations                                     |
+| --------------------------------- | ------------------ | --------------------------------------------------- |
+| `ConversationStore`/`MessageStore`| Persistence        | `adapters/in-memory`, `adapters/postgres`           |
+| `TokenVerifier`                   | Authentication     | `adapters/jwt` (HMAC secret or JWKS endpoint)       |
+| `MessageBus`                      | Real-time delivery | `adapters/in-process`, `adapters/redis`             |
 
-`src/http` and `src/websocket` are the standalone-container adapters,
-built on the same ports and the same core service; `src/embedded.ts` is
-the in-process adapter. Neither is required by the other - an embedder
-never pulls in Express or ws.
+`src/http` and `src/websocket` are the standalone-service adapters;
+`src/embedded.ts` is the in-process one. Both sit on the same core, and
+neither depends on the other — embedding this never pulls in Express or ws.
+
+Implement `TokenVerifier` yourself to plug in an auth scheme the JWT
+adapter does not cover; nothing in the core will notice.
 
 ## Development
 
 ```
-pnpm install
-pnpm test            # fast, no infrastructure needed
-pnpm test:integration # needs a real Postgres - see docker-compose.yml
-pnpm typecheck
-pnpm lint
-pnpm build
+make help          # every target
+make install
+make test          # fast, no infrastructure
+make test-all      # adds integration tests, needs Postgres
+make check         # lint, typecheck, test, build
 ```
 
-## Kubernetes
+Integration tests run against a real Postgres:
 
-Manifests and usage are in [k8s/](./k8s/README.md).
+```
+make up-deps       # Postgres and Redis only
+make test-integration
+```
 
 ## Releasing
 
-Pushing a tag matching `v*` builds and pushes a container image to GHCR
-and publishes the npm package, via `.github/workflows/release.yml`.
-Publishing to npm needs an `NPM_TOKEN` repo secret; nothing else does.
-
-## Status
-
-Complete - all 20 phases in [PHASES.md](./PHASES.md).
+Push a tag matching `v*`. CI builds and pushes the container image to GHCR
+and publishes the npm package.
 
 ## License
 

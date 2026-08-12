@@ -8,9 +8,9 @@ const MESSAGE_EVENT = 'message'
 /**
  * Single-process implementation of MessageBus: publish() and onMessage()
  * both run in this same process, so this only fans a message out to
- * connections held by this one instance. The Redis adapter built in a
- * later phase implements the same port so a message published on one
- * running instance still reaches a recipient connected to another.
+ * connections held by this one instance. Use RedisMessageBus instead when
+ * running more than one, so a message published on one still reaches a
+ * recipient connected to another.
  */
 export class InProcessMessageBus implements MessageBus {
   private readonly emitter = new EventEmitter()

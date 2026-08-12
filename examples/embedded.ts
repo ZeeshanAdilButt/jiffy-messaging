@@ -1,25 +1,24 @@
 /**
- * Embedding jiffy-messaging directly in a host process: no HTTP, no
- * network hop, just function calls against adapters the host supplies.
+ * Running jiffy-messaging in-process: no HTTP, no network hop, just calls
+ * against adapters the host supplies.
  *
- * In-memory adapters here so this runs standalone with nothing else
- * running - a real host would pass Postgres adapters instead (see
- * src/adapters/postgres). Run with: pnpm example:embedded
+ * Uses in-memory adapters so this runs with nothing else installed. A real
+ * service swaps in the Postgres adapters and its own TokenVerifier;
+ * nothing below changes.
  *
- * See networked.ts for the same package used as a standalone container
- * over REST and WebSocket instead.
+ * Run with: make example-embedded
  */
 import {
   createEmbeddedMessaging,
   InMemoryConversationStore,
   InMemoryMessageStore,
+  NotAParticipantError,
   type TokenVerifier,
 } from '../src/index.js'
 
-// A host platform's own auth decides who a user is; jiffy-messaging just
-// needs something satisfying TokenVerifier. A real host would use the JWT
-// adapter (src/adapters/jwt) against its own tokens instead of a stub
-// that trusts whatever string it is given.
+// Stands in for whatever already authenticates your users. Trusting the
+// token as the user id keeps this example to one file; real deployments
+// use the JWT adapter, or their own implementation of this interface.
 class StubTokenVerifier implements TokenVerifier {
   async verify(token: string) {
     return { userId: token }
@@ -27,28 +26,51 @@ class StubTokenVerifier implements TokenVerifier {
 }
 
 async function main() {
-  const embedded = createEmbeddedMessaging({
+  const jiffy = createEmbeddedMessaging({
     conversations: new InMemoryConversationStore(),
     messages: new InMemoryMessageStore(),
     tokenVerifier: new StubTokenVerifier(),
   })
 
-  const mentor = await embedded.verifyToken('mentor_1')
-  const mentee = await embedded.verifyToken('mentee_1')
+  const alice = await jiffy.verifyToken('user_alice')
+  const bob = await jiffy.verifyToken('user_bob')
 
-  const conversation = await embedded.messaging.createConversation([mentor.userId, mentee.userId])
-  console.log('created conversation', conversation.id)
+  const conversation = await jiffy.messaging.createConversation([alice.userId, bob.userId])
+  console.log('conversation:', conversation.id)
 
-  const message = await embedded.messaging.sendMessage({
+  await jiffy.messaging.sendMessage({
     conversationId: conversation.id,
-    senderId: mentor.userId,
-    body: 'How did the last session go?',
+    senderId: alice.userId,
+    body: 'Are we still on for tomorrow?',
   })
-  console.log('mentor sent:', message.body)
+  await jiffy.messaging.sendMessage({
+    conversationId: conversation.id,
+    senderId: bob.userId,
+    body: 'Yes, 3pm works.',
+  })
 
-  await embedded.messaging.markRead(conversation.id, mentee.userId, new Date())
-  const messages = await embedded.messaging.listMessages(conversation.id, mentee.userId)
-  console.log('mentee now sees', messages.length, 'message(s), and has marked the conversation read')
+  const history = await jiffy.messaging.listMessages(conversation.id, bob.userId)
+  console.log('history:')
+  for (const message of history) {
+    console.log(`  ${message.senderId}: ${message.body}`)
+  }
+
+  await jiffy.messaging.markRead(conversation.id, bob.userId, new Date())
+  const afterRead = await jiffy.messaging.getConversation(conversation.id, bob.userId)
+  const bobState = afterRead.participants.find((p) => p.userId === bob.userId)
+  console.log('bob last read at:', bobState?.lastReadAt?.toISOString())
+
+  // Participation is enforced on every operation, not just at creation.
+  try {
+    await jiffy.messaging.sendMessage({
+      conversationId: conversation.id,
+      senderId: 'user_carol',
+      body: 'Let me in',
+    })
+  } catch (error) {
+    if (!(error instanceof NotAParticipantError)) throw error
+    console.log('rejected non-participant:', error.message)
+  }
 }
 
 main().catch((error: unknown) => {

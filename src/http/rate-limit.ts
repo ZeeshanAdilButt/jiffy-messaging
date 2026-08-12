@@ -1,12 +1,10 @@
 import { rateLimit, type RateLimitRequestHandler } from 'express-rate-limit'
 
 // Both limiters are in-memory, so each running instance enforces its own
-// count rather than a count shared across every instance behind a load
-// balancer. That is a real gap for a multi-instance deployment - the
-// actual limit per client ends up being (configured limit) x (instance
-// count) - but it still stops a single instance from being overwhelmed,
-// and closing the gap needs a shared store (Redis) this phase does not
-// add.
+// count rather than one shared across every instance behind a load
+// balancer. The effective limit per client is therefore (configured
+// limit) x (instance count). That still protects any single instance from
+// being overwhelmed; a global limit would need a shared store.
 
 export interface RateLimitOptions {
   windowMs?: number

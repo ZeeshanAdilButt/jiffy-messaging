@@ -52,7 +52,7 @@ async function deliverToParticipants(
  * unauthenticated caller never gets a live socket, not even briefly.
  *
  * This assumes it owns every upgrade event on the given server, which
- * holds for the standalone server this package builds in a later phase.
+ * holds for the standalone server in src/server.
  */
 export function attachWebSocketServer(config: AttachWebSocketServerConfig): ConnectionRegistry {
   const registry = new ConnectionRegistry()

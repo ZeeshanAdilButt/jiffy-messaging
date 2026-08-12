@@ -14,13 +14,14 @@ import { createHttpApp } from '../http/index.js'
 import type { TokenVerifier, VerifiedIdentity } from '../ports/index.js'
 import { attachWebSocketServer } from '../websocket/index.js'
 
-// This suite talks to a real Postgres, unlike everything else in this
-// repo - see PHASES.md: the unit tests through phase 5 prove the core
-// works against the in-memory adapter, this proves the whole stack works
-// against the real one. Run with `pnpm test:integration` and a real
-// DATABASE_URL; excluded from the default `pnpm test` run since that
-// should stay fast and infra-free. CI provides a Postgres service
-// container for this - see .github/workflows/ci.yml.
+// The only suite that talks to a real Postgres. Everything else either
+// exercises the core against the in-memory adapter or one adapter against
+// a fake driver; this runs the real storage, HTTP, and WebSocket layers
+// together, wired the way createServer wires them.
+//
+// Run with `make test-integration`. Excluded from the default test run so
+// that stays fast and infra-free; CI provides a Postgres service
+// container for it.
 if (!process.env.DATABASE_URL) {
   throw new Error(
     'DATABASE_URL is required for the integration suite. Run against a real Postgres, e.g. via ' +
