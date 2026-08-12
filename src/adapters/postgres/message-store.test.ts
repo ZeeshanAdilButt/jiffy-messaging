@@ -31,14 +31,14 @@ describe('PostgresMessageStore', () => {
   })
 
   describe('listByConversation', () => {
-    it('filters by conversation id only when no options are given', async () => {
+    it('applies a default limit when no options are given', async () => {
       const pool = new FakePool([{ rows: [] }])
       const store = new PostgresMessageStore(pool as unknown as Pool)
 
       await store.listByConversation('c1')
 
-      expect(pool.queries[0]!.params).toEqual(['c1'])
-      expect(pool.queries[0]!.text).not.toContain('LIMIT')
+      expect(pool.queries[0]!.params).toEqual(['c1', 50])
+      expect(pool.queries[0]!.text).toContain('LIMIT $2')
     })
 
     it('adds before and limit as positional parameters in the order given', async () => {
@@ -50,6 +50,24 @@ describe('PostgresMessageStore', () => {
 
       expect(pool.queries[0]!.params).toEqual(['c1', before, 5])
       expect(pool.queries[0]!.text).toContain('LIMIT $3')
+    })
+
+    it('clamps a caller-supplied limit above the maximum down to the maximum', async () => {
+      const pool = new FakePool([{ rows: [] }])
+      const store = new PostgresMessageStore(pool as unknown as Pool)
+
+      await store.listByConversation('c1', { limit: 1_000_000 })
+
+      expect(pool.queries[0]!.params).toEqual(['c1', 200])
+    })
+
+    it('never emits a query with no LIMIT clause at all', async () => {
+      const pool = new FakePool([{ rows: [] }])
+      const store = new PostgresMessageStore(pool as unknown as Pool)
+
+      await store.listByConversation('c1')
+
+      expect(pool.queries[0]!.text).toContain('LIMIT')
     })
 
     it('maps returned rows to messages', async () => {

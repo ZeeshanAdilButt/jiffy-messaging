@@ -7,6 +7,18 @@ function userId(res: Response): string {
   return res.locals.userId as string
 }
 
+/**
+ * With no cap, a single request could hand PostgresConversationStore.create
+ * an arbitrarily large participantIds array, one INSERT with an
+ * arbitrarily large parameter and an arbitrarily large conversation row
+ * set to build a response from - all inside one open transaction. This is
+ * the DTO-layer boundary where an untrusted client's request becomes a
+ * validated call into the core, so it is where that gets stopped, rather
+ * than relying on every current and future ConversationStore
+ * implementation to enforce it itself.
+ */
+const MAX_PARTICIPANTS = 50
+
 export function createConversationsRouter(messaging: MessagingService): Router {
   const router = Router()
 
@@ -15,6 +27,10 @@ export function createConversationsRouter(messaging: MessagingService): Router {
       const participantIds: unknown = req.body?.participantIds
       if (!Array.isArray(participantIds) || participantIds.some((id) => typeof id !== 'string')) {
         res.status(400).json({ error: 'participantIds must be an array of strings' })
+        return
+      }
+      if (participantIds.length > MAX_PARTICIPANTS) {
+        res.status(400).json({ error: `participantIds cannot exceed ${MAX_PARTICIPANTS} entries` })
         return
       }
       if (!participantIds.includes(userId(res))) {

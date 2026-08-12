@@ -1,5 +1,15 @@
 export interface VerifiedIdentity {
   userId: string
+  /**
+   * When the underlying token expires, if the verifier knows. Optional
+   * because not every TokenVerifier implementation is backed by a token
+   * that has an expiry a caller can read back out - a hand-rolled
+   * implementation is free to leave this unset. Consumers that care about
+   * a long-lived connection outliving the token that opened it (see the
+   * WebSocket server) use this to react before the token would otherwise
+   * still be trusted.
+   */
+  expiresAt?: Date
 }
 
 /**

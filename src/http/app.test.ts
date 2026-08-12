@@ -1,3 +1,7 @@
+import express from 'express'
+import pino from 'pino'
+import { pinoHttp } from 'pino-http'
+import { Writable } from 'node:stream'
 import request from 'supertest'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { Express } from 'express'
@@ -5,7 +9,7 @@ import type { Express } from 'express'
 import { InMemoryConversationStore, InMemoryMessageStore } from '../adapters/in-memory/index.js'
 import type { Message } from '../domain/index.js'
 import type { MessageBus, TokenVerifier, VerifiedIdentity } from '../ports/index.js'
-import { createHttpApp } from './app.js'
+import { createHttpApp, LOG_REDACT_PATHS } from './app.js'
 
 // Token "user_a" verifies as user_a, "user_b" as user_b, anything else fails.
 // Real verification is jose's job (see adapters/jwt); this only needs to be
@@ -81,6 +85,20 @@ describe('HTTP app', () => {
     it('rejects a malformed participantIds field', async () => {
       const res = await authed(app, 'post', '/conversations', 'user_a').send({ participantIds: 'user_b' })
       expect(res.status).toBe(400)
+    })
+
+    it('rejects a participantIds array over the configured cap', async () => {
+      const tooMany = Array.from({ length: 51 }, (_, i) => `user_${i}`)
+      tooMany[0] = 'user_a'
+      const res = await authed(app, 'post', '/conversations', 'user_a').send({ participantIds: tooMany })
+      expect(res.status).toBe(400)
+    })
+
+    it('accepts a participantIds array at exactly the cap', async () => {
+      const atCap = Array.from({ length: 50 }, (_, i) => `user_${i}`)
+      atCap[0] = 'user_a'
+      const res = await authed(app, 'post', '/conversations', 'user_a').send({ participantIds: atCap })
+      expect(res.status).toBe(201)
     })
   })
 
@@ -209,5 +227,57 @@ describe('HTTP app', () => {
       expect(published).toHaveLength(1)
       expect(published[0]).toMatchObject({ body: 'hi' })
     })
+  })
+})
+
+describe('request logging', () => {
+  // Exercises the exact redact config createHttpApp wires into pinoHttp
+  // (LOG_REDACT_PATHS, imported rather than duplicated) against a
+  // standalone app and a capturing stream, since the app under test above
+  // logs through the shared singleton logger in observability/logger.ts,
+  // which writes straight to stdout and is not something a test can
+  // intercept without changing what production actually does.
+  it('does not write the raw Authorization header value to the log output', async () => {
+    const chunks: Buffer[] = []
+    const capture = new Writable({
+      write(chunk: Buffer | string, _encoding, callback) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+        callback()
+      },
+    })
+    const testLogger = pino({}, capture)
+
+    const probe = express()
+    probe.use(pinoHttp({ logger: testLogger, redact: LOG_REDACT_PATHS }))
+    probe.get('/probe', (_req, res) => res.status(200).end())
+
+    const secretToken = 'super-secret-jwt-value-that-must-not-be-logged'
+    await request(probe).get('/probe').set('Authorization', `Bearer ${secretToken}`)
+
+    const logged = Buffer.concat(chunks).toString('utf8')
+    expect(logged).not.toContain(secretToken)
+    expect(logged).toContain('"authorization":"[Redacted]"')
+  })
+
+  it('does not write the raw Cookie header value to the log output', async () => {
+    const chunks: Buffer[] = []
+    const capture = new Writable({
+      write(chunk: Buffer | string, _encoding, callback) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+        callback()
+      },
+    })
+    const testLogger = pino({}, capture)
+
+    const probe = express()
+    probe.use(pinoHttp({ logger: testLogger, redact: LOG_REDACT_PATHS }))
+    probe.get('/probe', (_req, res) => res.status(200).end())
+
+    const secretCookie = 'session=super-secret-cookie-value'
+    await request(probe).get('/probe').set('Cookie', secretCookie)
+
+    const logged = Buffer.concat(chunks).toString('utf8')
+    expect(logged).not.toContain(secretCookie)
+    expect(logged).toContain('"cookie":"[Redacted]"')
   })
 })

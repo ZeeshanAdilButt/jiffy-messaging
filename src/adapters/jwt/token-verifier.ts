@@ -42,7 +42,13 @@ export class JwtTokenVerifier implements TokenVerifier {
       throw new InvalidTokenError(`missing or non-string "${this.userIdClaim}" claim`)
     }
 
-    return { userId }
+    // requiredClaims below already forces exp to be present on anything
+    // that reaches this point, but its type in jose's JWTPayload is still
+    // `number | undefined`, so this stays a real check rather than an
+    // assertion.
+    const expiresAt = typeof payload.exp === 'number' ? new Date(payload.exp * 1000) : undefined
+
+    return { userId, expiresAt }
   }
 
   private async verifyPayload(token: string) {
@@ -50,6 +56,16 @@ export class JwtTokenVerifier implements TokenVerifier {
       const { payload } = await jwtVerify(token, this.key, {
         issuer: this.options.issuer,
         audience: this.options.audience,
+        // A token with no "exp" claim is otherwise valid forever once
+        // signed - jose only checks expiry when the claim is present, it
+        // does not require one. requiredClaims makes the claim mandatory
+        // regardless of issuer/audience config, which is what actually
+        // closes that hole; issuer and audience stay opt-in (see main.ts)
+        // since not every deployment of this service sets them.
+        // this.userIdClaim (defaults to "sub") is required for the same
+        // reason the manual check above exists: a token that verifies but
+        // carries no identity is useless to this service either way.
+        requiredClaims: ['exp', this.userIdClaim],
       })
       return payload
     } catch (error) {

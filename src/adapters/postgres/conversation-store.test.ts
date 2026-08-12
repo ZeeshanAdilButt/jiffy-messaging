@@ -44,9 +44,9 @@ class FakePool {
 
 describe('PostgresConversationStore', () => {
   describe('create', () => {
-    it('inserts the conversation and each participant inside one transaction', async () => {
+    it('inserts the conversation and every participant in one batched statement inside one transaction', async () => {
       const createdAt = new Date('2026-01-01T00:00:00Z')
-      const client = new FakeClient([{ rows: [{ id: 'c1', created_at: createdAt }] }, { rows: [] }, { rows: [] }])
+      const client = new FakeClient([{ rows: [{ id: 'c1', created_at: createdAt }] }, { rows: [] }])
       const pool = new FakePool(client)
       const store = new PostgresConversationStore(pool as unknown as Pool)
 
@@ -64,11 +64,25 @@ describe('PostgresConversationStore', () => {
       const statements = client.queries.map((q) => q.text.trim())
       expect(statements[0]).toBe('BEGIN')
       expect(statements[statements.length - 1]).toBe('COMMIT')
-      expect(client.queries[2]!.params).toEqual(['c1', 'a'])
-      expect(client.queries[3]!.params).toEqual(['c1', 'b'])
+      // One INSERT for both participants, not one per participant.
+      expect(client.queries).toHaveLength(4)
+      expect(client.queries[2]!.text).toContain('INSERT INTO conversation_participants')
+      expect(client.queries[2]!.params).toEqual(['c1', ['a', 'b']])
     })
 
-    it('rolls back and rethrows when a participant insert fails', async () => {
+    it('does not insert a participants row at all when participantIds is empty', async () => {
+      const createdAt = new Date('2026-01-01T00:00:00Z')
+      const client = new FakeClient([{ rows: [{ id: 'c1', created_at: createdAt }] }])
+      const pool = new FakePool(client)
+      const store = new PostgresConversationStore(pool as unknown as Pool)
+
+      await store.create([])
+
+      const statements = client.queries.map((q) => q.text.trim())
+      expect(statements).toEqual(['BEGIN', expect.stringContaining('INSERT INTO conversations'), 'COMMIT'])
+    })
+
+    it('rolls back and rethrows when the participant insert fails', async () => {
       const client = new FakeClient([{ rows: [{ id: 'c1', created_at: new Date() }] }])
       client.query = async (text: string, params?: unknown[]) => {
         client.queries.push({ text, params })

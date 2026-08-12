@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { JwtTokenVerifier } from './adapters/jwt/index.js'
-import { buildTokenVerifier, parseEnv } from './main.js'
+import { buildTokenVerifier, missingJwtClaimChecks, parseEnv } from './main.js'
 
 const BASE_ENV = { DATABASE_URL: 'postgres://localhost/test', JWT_SECRET: 'a-test-secret' }
 
@@ -68,6 +68,30 @@ describe('parseEnv', () => {
   it('carries redisUrl through when REDIS_URL is set', () => {
     const config = parseEnv({ ...BASE_ENV, REDIS_URL: 'redis://localhost:6379' })
     expect(config.redisUrl).toBe('redis://localhost:6379')
+  })
+})
+
+describe('missingJwtClaimChecks', () => {
+  it('flags both when neither issuer nor audience is set', () => {
+    expect(missingJwtClaimChecks({ kind: 'secret', secret: 'x' })).toEqual(['JWT_ISSUER', 'JWT_AUDIENCE'])
+  })
+
+  it('flags only audience when issuer is set', () => {
+    expect(missingJwtClaimChecks({ kind: 'secret', secret: 'x', issuer: 'example-platform' })).toEqual([
+      'JWT_AUDIENCE',
+    ])
+  })
+
+  it('flags only issuer when audience is set', () => {
+    expect(missingJwtClaimChecks({ kind: 'secret', secret: 'x', audience: 'jiffy-messaging' })).toEqual([
+      'JWT_ISSUER',
+    ])
+  })
+
+  it('flags neither when both are set', () => {
+    expect(
+      missingJwtClaimChecks({ kind: 'secret', secret: 'x', issuer: 'example-platform', audience: 'jiffy-messaging' }),
+    ).toEqual([])
   })
 })
 
