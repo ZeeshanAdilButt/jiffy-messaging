@@ -83,7 +83,10 @@ jobs:
             echo "::warning::NPM_TOKEN is not set, skipping npm publish. The container image still published."
           fi
 
+      # --access public is required here even though an unscoped package
+      # defaults to public anyway - npm rejects --provenance on a new
+      # package's first publish without it stated explicitly.
       - if: steps.npm_credentials.outputs.present == 'true'
-        run: pnpm publish --no-git-checks --provenance
+        run: pnpm publish --no-git-checks --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
