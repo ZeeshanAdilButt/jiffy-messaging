@@ -4,7 +4,7 @@ import type { Pool } from 'pg'
 import { InProcessMessageBus } from '../adapters/in-process/index.js'
 import { PostgresConversationStore, PostgresMessageStore } from '../adapters/postgres/index.js'
 import { createHttpApp } from '../http/index.js'
-import type { MessageBus, TokenVerifier } from '../ports/index.js'
+import type { ConversationGate, MessageBus, TokenVerifier } from '../ports/index.js'
 import { attachWebSocketServer } from '../websocket/index.js'
 
 export interface CreateServerConfig {
@@ -17,6 +17,13 @@ export interface CreateServerConfig {
    * connected to a different one.
    */
   messageBus?: MessageBus
+  /**
+   * Omit for a deployment where any two authenticated callers may talk to
+   * each other. Pass an HttpConversationGate (see
+   * src/adapters/conversation-gate) to defer that decision to the host
+   * platform instead.
+   */
+  conversationGate?: ConversationGate
 }
 
 /**
@@ -40,6 +47,7 @@ export function createServer(config: CreateServerConfig): Server {
     messages,
     tokenVerifier: config.tokenVerifier,
     messageBus,
+    conversationGate: config.conversationGate,
     readinessCheck: async () => {
       await config.pool.query('SELECT 1')
       return true

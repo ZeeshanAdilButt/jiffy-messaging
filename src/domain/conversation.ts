@@ -1,7 +1,7 @@
 // A conversation is a set of participants who can exchange messages. It has
 // no idea why those participants are allowed to talk to each other, that
 // decision belongs to whatever created it. See the ConversationGate port
-// in ports.ts for where that check actually happens.
+// in src/ports/conversation-gate.ts for where that check actually happens.
 
 export interface ConversationParticipant {
   userId: string
@@ -25,6 +25,9 @@ export function isParticipant(conversation: Conversation, userId: string): boole
   return conversation.participants.some((p) => p.userId === userId)
 }
 
-export function otherParticipants(conversation: Conversation, userId: string): ConversationParticipant[] {
+export function otherParticipants(
+  conversation: Conversation,
+  userId: string,
+): ConversationParticipant[] {
   return conversation.participants.filter((p) => p.userId !== userId)
 }

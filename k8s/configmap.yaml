@@ -5,9 +5,14 @@ kind: ConfigMap
 metadata:
   name: jiffy-messaging-config
 data:
-  PORT: "8080"
+  PORT: '8080'
   # Uncomment and set these if the host platform's tokens carry a
   # non-default issuer, audience, or user id claim.
   # JWT_ISSUER: ""
   # JWT_AUDIENCE: ""
   # JWT_USER_ID_CLAIM: ""
+  # Uncomment to defer conversation creation and send authorization to the
+  # host platform instead of allowing any two callers to talk - see
+  # CONVERSATION_GATE_SECRET in secret.yaml.example, which must be set
+  # alongside this one.
+  # CONVERSATION_GATE_URL: "https://platform.example.com/internal/messaging/can-create-conversation"

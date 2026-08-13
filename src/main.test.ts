@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import { JwtTokenVerifier } from './adapters/jwt/index.js'
-import { buildTokenVerifier, missingJwtClaimChecks, parseEnv } from './main.js'
+import { HttpConversationGate } from './adapters/conversation-gate/index.js'
+import { buildConversationGate, buildTokenVerifier, missingJwtClaimChecks, parseEnv } from './main.js'
 
 const BASE_ENV = { DATABASE_URL: 'postgres://localhost/test', JWT_SECRET: 'a-test-secret' }
 
@@ -38,12 +39,21 @@ describe('parseEnv', () => {
   })
 
   it('picks the jwks kind when JWT_JWKS_URI is set', () => {
-    const config = parseEnv({ ...BASE_ENV, JWT_JWKS_URI: 'https://platform.example.com/.well-known/jwks.json' })
-    expect(config.jwt).toMatchObject({ kind: 'jwks', uri: 'https://platform.example.com/.well-known/jwks.json' })
+    const config = parseEnv({
+      ...BASE_ENV,
+      JWT_JWKS_URI: 'https://platform.example.com/.well-known/jwks.json',
+    })
+    expect(config.jwt).toMatchObject({
+      kind: 'jwks',
+      uri: 'https://platform.example.com/.well-known/jwks.json',
+    })
   })
 
   it('prefers jwks over secret when both are set', () => {
-    const config = parseEnv({ ...BASE_ENV, JWT_JWKS_URI: 'https://platform.example.com/.well-known/jwks.json' })
+    const config = parseEnv({
+      ...BASE_ENV,
+      JWT_JWKS_URI: 'https://platform.example.com/.well-known/jwks.json',
+    })
     expect(config.jwt.kind).toBe('jwks')
   })
 
@@ -68,6 +78,48 @@ describe('parseEnv', () => {
   it('carries redisUrl through when REDIS_URL is set', () => {
     const config = parseEnv({ ...BASE_ENV, REDIS_URL: 'redis://localhost:6379' })
     expect(config.redisUrl).toBe('redis://localhost:6379')
+  })
+
+  it('leaves conversationGate unset when neither gate variable is set', () => {
+    expect(parseEnv(BASE_ENV).conversationGate).toBeUndefined()
+  })
+
+  it('carries conversationGate through when both variables are set', () => {
+    const config = parseEnv({
+      ...BASE_ENV,
+      CONVERSATION_GATE_URL: 'https://api.example.com/internal/messaging/can-create-conversation',
+      CONVERSATION_GATE_SECRET: 'shared-secret',
+    })
+    expect(config.conversationGate).toEqual({
+      url: 'https://api.example.com/internal/messaging/can-create-conversation',
+      secret: 'shared-secret',
+    })
+  })
+
+  it('throws when only CONVERSATION_GATE_URL is set', () => {
+    expect(() =>
+      parseEnv({ ...BASE_ENV, CONVERSATION_GATE_URL: 'https://api.example.com/gate' }),
+    ).toThrow('CONVERSATION_GATE_URL and CONVERSATION_GATE_SECRET must both be set, or neither')
+  })
+
+  it('throws when only CONVERSATION_GATE_SECRET is set', () => {
+    expect(() => parseEnv({ ...BASE_ENV, CONVERSATION_GATE_SECRET: 'shared-secret' })).toThrow(
+      'CONVERSATION_GATE_URL and CONVERSATION_GATE_SECRET must both be set, or neither',
+    )
+  })
+})
+
+describe('buildConversationGate', () => {
+  it("returns undefined when unconfigured, deferring to MessagingService's own default", () => {
+    expect(buildConversationGate(undefined)).toBeUndefined()
+  })
+
+  it('builds an HttpConversationGate when configured', () => {
+    const gate = buildConversationGate({
+      url: 'https://api.example.com/internal/messaging/can-create-conversation',
+      secret: 'shared-secret',
+    })
+    expect(gate).toBeInstanceOf(HttpConversationGate)
   })
 })
 
@@ -102,7 +154,10 @@ describe('buildTokenVerifier', () => {
   })
 
   it('builds a JwtTokenVerifier from a jwks config', () => {
-    const verifier = buildTokenVerifier({ kind: 'jwks', uri: 'https://platform.example.com/.well-known/jwks.json' })
+    const verifier = buildTokenVerifier({
+      kind: 'jwks',
+      uri: 'https://platform.example.com/.well-known/jwks.json',
+    })
     expect(verifier).toBeInstanceOf(JwtTokenVerifier)
   })
 })

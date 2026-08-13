@@ -3,7 +3,13 @@ import { pinoHttp } from 'pino-http'
 
 import { MessagingService } from '../core/index.js'
 import { logger } from '../observability/logger.js'
-import type { ConversationStore, MessageBus, MessageStore, TokenVerifier } from '../ports/index.js'
+import type {
+  ConversationGate,
+  ConversationStore,
+  MessageBus,
+  MessageStore,
+  TokenVerifier,
+} from '../ports/index.js'
 import { createAuthMiddleware } from './auth-middleware.js'
 import { createConversationsRouter } from './conversations-router.js'
 import { errorHandler } from './error-handler.js'
@@ -23,6 +29,13 @@ export interface HttpAppConfig {
    * for an HTTP-only deployment with no real-time delivery.
    */
   messageBus?: MessageBus
+  /**
+   * Host-level authorization for who may create or continue a
+   * conversation with whom. Omit it and MessagingService defaults to
+   * allowing any two authenticated callers to talk - see ConversationGate
+   * in src/ports for what a host implements to change that.
+   */
+  conversationGate?: ConversationGate
   /** See createHealthRouter - backs GET /ready. */
   readinessCheck?: () => Promise<boolean>
   /**
@@ -54,7 +67,12 @@ export const LOG_REDACT_PATHS = ['req.headers.authorization', 'req.headers.cooki
  * process without ever calling listen().
  */
 export function createHttpApp(config: HttpAppConfig): Express {
-  const messaging = new MessagingService(config.conversations, config.messages, config.messageBus)
+  const messaging = new MessagingService(
+    config.conversations,
+    config.messages,
+    config.messageBus,
+    config.conversationGate,
+  )
 
   const app = express()
   app.set('trust proxy', config.trustProxy ?? 1)

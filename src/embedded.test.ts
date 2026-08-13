@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import { InMemoryConversationStore, InMemoryMessageStore } from './adapters/in-memory/index.js'
 import { createEmbeddedMessaging } from './embedded.js'
-import type { TokenVerifier, VerifiedIdentity } from './ports/index.js'
+import { ConversationNotAllowedError } from './core/index.js'
+import type { ConversationGate, TokenVerifier, VerifiedIdentity } from './ports/index.js'
 
 class FakeTokenVerifier implements TokenVerifier {
   constructor(private readonly identity: VerifiedIdentity | null) {}
@@ -23,7 +24,7 @@ describe('createEmbeddedMessaging', () => {
       tokenVerifier: new FakeTokenVerifier({ userId: 'user_1' }),
     })
 
-    const conversation = await embedded.messaging.createConversation(['user_1', 'user_2'])
+    const conversation = await embedded.messaging.createConversation('user_1', ['user_1', 'user_2'])
     const message = await embedded.messaging.sendMessage({
       conversationId: conversation.id,
       senderId: 'user_1',
@@ -51,5 +52,26 @@ describe('createEmbeddedMessaging', () => {
     })
 
     await expect(embedded.verifyToken('bad-token')).rejects.toThrow('invalid token')
+  })
+
+  it('defers conversation creation to the configured gate', async () => {
+    const gate: ConversationGate = {
+      async canCreateConversation(requesterId, participantIds) {
+        return requesterId === 'user_1' && participantIds.includes('user_2')
+      },
+    }
+    const embedded = createEmbeddedMessaging({
+      conversations: new InMemoryConversationStore(),
+      messages: new InMemoryMessageStore(),
+      tokenVerifier: new FakeTokenVerifier({ userId: 'user_1' }),
+      conversationGate: gate,
+    })
+
+    await expect(
+      embedded.messaging.createConversation('user_1', ['user_1', 'user_2']),
+    ).resolves.toMatchObject({})
+    await expect(
+      embedded.messaging.createConversation('user_1', ['user_1', 'user_3']),
+    ).rejects.toThrow(ConversationNotAllowedError)
   })
 })

@@ -53,6 +53,7 @@ not care whether it is a function call or an HTTP request.
 - [Standalone usage](#standalone-usage)
 - [HTTP API](#http-api)
 - [WebSocket](#websocket)
+- [Host authorization](#host-authorization)
 - [Configuration](#configuration)
 - [Running more than one instance](#running-more-than-one-instance)
 - [Production deployment](#production-deployment)
@@ -84,9 +85,12 @@ const messaging = createEmbeddedMessaging({
   conversations: new PostgresConversationStore(pool),
   messages: new PostgresMessageStore(pool),
   tokenVerifier: myTokenVerifier, // verifies your service's own tokens
+  // Optional. Omit it and any two authenticated callers may talk to each
+  // other - see "Host authorization" below.
+  // conversationGate: myConversationGate,
 })
 
-const conversation = await messaging.messaging.createConversation(['user_1', 'user_2'])
+const conversation = await messaging.messaging.createConversation('user_1', ['user_1', 'user_2'])
 
 await messaging.messaging.sendMessage({
   conversationId: conversation.id,
@@ -113,8 +117,7 @@ make example-embedded
 make up
 ```
 
-Brings up Postgres, Redis, and two service instances on ports 8080 and
-8081. Or run the published image directly:
+Brings up Postgres, Redis, and two service instances on ports 8080 and 8081. Or run the published image directly:
 
 ```
 docker run -p 8080:8080 \
@@ -150,14 +153,14 @@ you are fronting with something else).
 Every route below takes `Authorization: Bearer <token>`, verified through
 the `TokenVerifier` your deployment configures.
 
-| Method | Path                        | Body / query                        | Returns             |
-| ------ | --------------------------- | ----------------------------------- | ------------------- |
-| POST   | /conversations              | `{ participantIds: string[] }`      | 201, conversation   |
-| GET    | /conversations              |                                     | 200, conversation[] |
-| GET    | /conversations/:id          |                                     | 200, conversation   |
-| POST   | /conversations/:id/messages | `{ body: string }`                  | 201, message        |
-| GET    | /conversations/:id/messages | `?limit=50&before=<ISO date>`       | 200, message[]      |
-| POST   | /conversations/:id/read     |                                     | 204                 |
+| Method | Path                        | Body / query                   | Returns             |
+| ------ | --------------------------- | ------------------------------ | ------------------- |
+| POST   | /conversations              | `{ participantIds: string[] }` | 201, conversation   |
+| GET    | /conversations              |                                | 200, conversation[] |
+| GET    | /conversations/:id          |                                | 200, conversation   |
+| POST   | /conversations/:id/messages | `{ body: string }`             | 201, message        |
+| GET    | /conversations/:id/messages | `?limit=50&before=<ISO date>`  | 200, message[]      |
+| POST   | /conversations/:id/read     |                                | 204                 |
 
 `participantIds` on POST /conversations is capped at 50 entries; a longer
 array gets a 400 rather than being accepted and inserted one row at a
@@ -166,15 +169,16 @@ larger value down to 200 - there is no way to ask for a whole
 conversation's history in one request.
 
 Errors: 400 malformed input, 401 missing or invalid token, 403 not a
-participant, 404 unknown conversation, 429 rate limited.
+participant (or, with a conversation gate configured, not authorized by
+it), 404 unknown conversation, 429 rate limited.
 
 Unauthenticated operational routes:
 
-| Method | Path     | Purpose                                        |
-| ------ | -------- | ---------------------------------------------- |
-| GET    | /health  | Liveness. No dependency checks                 |
-| GET    | /ready   | Readiness. Checks the database, 503 if not     |
-| GET    | /metrics | Prometheus metrics                             |
+| Method | Path     | Purpose                                    |
+| ------ | -------- | ------------------------------------------ |
+| GET    | /health  | Liveness. No dependency checks             |
+| GET    | /ready   | Readiness. Checks the database, 503 if not |
+| GET    | /metrics | Prometheus metrics                         |
 
 ## WebSocket
 
@@ -204,19 +208,74 @@ participates in, pushed as JSON:
 
 Delivery is push-only; send messages over the REST API.
 
+## Host authorization
+
+By default, any two authenticated callers may open a conversation with
+each other and it stays usable forever - `POST /conversations` only checks
+that the caller listed themselves in `participantIds`, nothing about
+whether they should be talking to the other id(s) at all. That is the
+right default for a service with no relationship model of its own (a
+generic chat app where anyone can DM anyone), and it is what you get with
+no further configuration.
+
+A host that decides who may talk to whom - accepted contacts, team
+membership, an accepted-share rule, anything - plugs that decision in by
+implementing `ConversationGate`:
+
+```ts
+interface ConversationGate {
+  canCreateConversation(requesterId: string, participantIds: string[]): Promise<boolean>
+}
+```
+
+Pass an instance as `conversationGate` to `createEmbeddedMessaging`,
+`createHttpApp`, or `createServer`. It is called before a conversation is
+created, and again before every message send - so a relationship that
+stops being true after creation (a revoked share, a removed contact) stops
+the conversation from accepting new messages on the very next attempt,
+without anything needing to actively archive it.
+
+Two adapters ship with the package:
+
+- `AllowAllGate` - the default. Always returns true. Passing it explicitly
+  reads the same as omitting the option.
+- `HttpConversationGate` - calls back to a host's own HTTP endpoint to ask
+  the question, authenticated with a shared secret sent as
+  `Authorization: Bearer <secret>`. Fails closed: unreachable, slow past
+  its timeout, a non-2xx response, or a body other than `{ allowed: true }`
+  are all treated as "not allowed" rather than opening the door because
+  the thing meant to decide couldn't be reached.
+
+```ts
+import { HttpConversationGate } from 'jiffy-messaging'
+
+const gate = new HttpConversationGate({
+  url: 'https://api.example.com/internal/messaging/can-create-conversation',
+  secret: process.env.CONVERSATION_GATE_SECRET!,
+})
+```
+
+The standalone server builds one automatically from `CONVERSATION_GATE_URL`
+and `CONVERSATION_GATE_SECRET` — see [Configuration](#configuration).
+
+Writing your own adapter is just implementing the one-method interface -
+nothing else in this package needs to know your relationship model exists.
+
 ## Configuration
 
-| Variable            | Required         | Purpose                                                      |
-| ------------------- | ---------------- | ------------------------------------------------------------ |
-| `DATABASE_URL`      | yes              | Postgres connection string                                   |
-| `JWT_SECRET`        | one of these two | HMAC secret for token verification                           |
-| `JWT_JWKS_URI`      |                  | JWKS endpoint for token verification, wins if both are set   |
-| `PORT`              |                  | Defaults to 8080                                             |
-| `JWT_ISSUER`        | recommended      | Expected `iss` claim. Unset logs a warning at startup         |
-| `JWT_AUDIENCE`      | recommended      | Expected `aud` claim. Unset logs a warning at startup         |
-| `JWT_USER_ID_CLAIM` |                  | Claim holding the user id, defaults to `sub`                 |
-| `REDIS_URL`         |                  | Required to run more than one instance, see below            |
-| `LOG_LEVEL`         |                  | Defaults to `info`                                           |
+| Variable                   | Required         | Purpose                                                                                          |
+| -------------------------- | ---------------- | -------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`             | yes              | Postgres connection string                                                                       |
+| `JWT_SECRET`               | one of these two | HMAC secret for token verification                                                               |
+| `JWT_JWKS_URI`             |                  | JWKS endpoint for token verification, wins if both are set                                       |
+| `PORT`                     |                  | Defaults to 8080                                                                                  |
+| `JWT_ISSUER`               | recommended      | Expected `iss` claim. Unset logs a warning at startup                                            |
+| `JWT_AUDIENCE`             | recommended      | Expected `aud` claim. Unset logs a warning at startup                                            |
+| `JWT_USER_ID_CLAIM`        |                  | Claim holding the user id, defaults to `sub`                                                     |
+| `REDIS_URL`                |                  | Required to run more than one instance, see below                                                |
+| `LOG_LEVEL`                |                  | Defaults to `info`                                                                                |
+| `CONVERSATION_GATE_URL`    |                  | Host endpoint for authorization decisions, see [Host authorization](#host-authorization)         |
+| `CONVERSATION_GATE_SECRET` |                  | Bearer credential sent to that endpoint. Must be set together with the URL above, or not at all  |
 
 A token with no `exp` (expiration) claim is always rejected, regardless of
 any of the above — that is not configurable. `JWT_ISSUER` and
@@ -274,11 +333,12 @@ make k8s-deploy       # applies k8s/ to the current context
 Ports and adapters. The core (`src/core`, `src/domain`) has no framework or
 database dependency — it depends only on interfaces in `src/ports`:
 
-| Port                              | Purpose            | Implementations                                     |
-| --------------------------------- | ------------------ | --------------------------------------------------- |
-| `ConversationStore`/`MessageStore`| Persistence        | `adapters/in-memory`, `adapters/postgres`           |
-| `TokenVerifier`                   | Authentication     | `adapters/jwt` (HMAC secret or JWKS endpoint)       |
-| `MessageBus`                      | Real-time delivery | `adapters/in-process`, `adapters/redis`             |
+| Port                               | Purpose            | Implementations                                                       |
+| ---------------------------------- | ------------------ | --------------------------------------------------------------------- |
+| `ConversationStore`/`MessageStore` | Persistence        | `adapters/in-memory`, `adapters/postgres`                             |
+| `TokenVerifier`                    | Authentication     | `adapters/jwt` (HMAC secret or JWKS endpoint)                         |
+| `MessageBus`                       | Real-time delivery | `adapters/in-process`, `adapters/redis`                               |
+| `ConversationGate`                 | Host authorization | `adapters/conversation-gate` (`AllowAllGate`, `HttpConversationGate`) |
 
 `src/http` and `src/websocket` are the standalone-service adapters;
 `src/embedded.ts` is the in-process one. Both sit on the same core, and

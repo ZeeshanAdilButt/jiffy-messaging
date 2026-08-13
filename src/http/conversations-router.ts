@@ -38,7 +38,7 @@ export function createConversationsRouter(messaging: MessagingService): Router {
         return
       }
 
-      const conversation = await messaging.createConversation(participantIds)
+      const conversation = await messaging.createConversation(userId(res), participantIds)
       res.status(201).json(conversation)
     } catch (error) {
       next(error)
@@ -63,58 +63,70 @@ export function createConversationsRouter(messaging: MessagingService): Router {
     }
   })
 
-  router.post('/conversations/:id/messages', async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const body: unknown = req.body?.body
-      if (typeof body !== 'string') {
-        res.status(400).json({ error: 'body must be a string' })
-        return
+  router.post(
+    '/conversations/:id/messages',
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const body: unknown = req.body?.body
+        if (typeof body !== 'string') {
+          res.status(400).json({ error: 'body must be a string' })
+          return
+        }
+
+        const message = await messaging.sendMessage({
+          conversationId: req.params.id as string,
+          senderId: userId(res),
+          body,
+        })
+        messagesPublishedTotal.inc()
+        res.status(201).json(message)
+      } catch (error) {
+        next(error)
       }
+    },
+  )
 
-      const message = await messaging.sendMessage({
-        conversationId: req.params.id as string,
-        senderId: userId(res),
-        body,
-      })
-      messagesPublishedTotal.inc()
-      res.status(201).json(message)
-    } catch (error) {
-      next(error)
-    }
-  })
+  router.get(
+    '/conversations/:id/messages',
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const rawLimit = req.query.limit
+        const rawBefore = req.query.before
 
-  router.get('/conversations/:id/messages', async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const rawLimit = req.query.limit
-      const rawBefore = req.query.before
+        const limit = rawLimit !== undefined ? Number(rawLimit) : undefined
+        if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
+          res.status(400).json({ error: 'limit must be a positive integer' })
+          return
+        }
 
-      const limit = rawLimit !== undefined ? Number(rawLimit) : undefined
-      if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
-        res.status(400).json({ error: 'limit must be a positive integer' })
-        return
+        const before = rawBefore !== undefined ? new Date(String(rawBefore)) : undefined
+        if (before !== undefined && Number.isNaN(before.getTime())) {
+          res.status(400).json({ error: 'before must be a valid date' })
+          return
+        }
+
+        const messages = await messaging.listMessages(req.params.id as string, userId(res), {
+          limit,
+          before,
+        })
+        res.status(200).json(messages)
+      } catch (error) {
+        next(error)
       }
+    },
+  )
 
-      const before = rawBefore !== undefined ? new Date(String(rawBefore)) : undefined
-      if (before !== undefined && Number.isNaN(before.getTime())) {
-        res.status(400).json({ error: 'before must be a valid date' })
-        return
+  router.post(
+    '/conversations/:id/read',
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        await messaging.markRead(req.params.id as string, userId(res), new Date())
+        res.status(204).send()
+      } catch (error) {
+        next(error)
       }
-
-      const messages = await messaging.listMessages(req.params.id as string, userId(res), { limit, before })
-      res.status(200).json(messages)
-    } catch (error) {
-      next(error)
-    }
-  })
-
-  router.post('/conversations/:id/read', async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      await messaging.markRead(req.params.id as string, userId(res), new Date())
-      res.status(204).send()
-    } catch (error) {
-      next(error)
-    }
-  })
+    },
+  )
 
   return router
 }
