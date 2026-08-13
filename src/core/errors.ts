@@ -18,3 +18,11 @@ export class EmptyMessageError extends Error {
     this.name = 'EmptyMessageError'
   }
 }
+
+export class ConversationNotAllowedError extends Error {
+  constructor(requesterId: string, participantIds: string[]) {
+    const others = participantIds.filter((id) => id !== requesterId)
+    super(`User ${requesterId} is not allowed to be in a conversation with ${others.join(', ')}`)
+    this.name = 'ConversationNotAllowedError'
+  }
+}

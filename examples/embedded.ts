@@ -35,7 +35,10 @@ async function main() {
   const alice = await jiffy.verifyToken('user_alice')
   const bob = await jiffy.verifyToken('user_bob')
 
-  const conversation = await jiffy.messaging.createConversation([alice.userId, bob.userId])
+  const conversation = await jiffy.messaging.createConversation(alice.userId, [
+    alice.userId,
+    bob.userId,
+  ])
   console.log('conversation:', conversation.id)
 
   await jiffy.messaging.sendMessage({

@@ -8,7 +8,12 @@ import type { Express } from 'express'
 
 import { InMemoryConversationStore, InMemoryMessageStore } from '../adapters/in-memory/index.js'
 import type { Message } from '../domain/index.js'
-import type { MessageBus, TokenVerifier, VerifiedIdentity } from '../ports/index.js'
+import type {
+  ConversationGate,
+  MessageBus,
+  TokenVerifier,
+  VerifiedIdentity,
+} from '../ports/index.js'
 import { createHttpApp, LOG_REDACT_PATHS } from './app.js'
 
 // Token "user_a" verifies as user_a, "user_b" as user_b, anything else fails.
@@ -72,7 +77,10 @@ describe('HTTP app', () => {
       })
 
       expect(res.status).toBe(201)
-      expect(res.body.participants.map((p: { userId: string }) => p.userId)).toEqual(['user_a', 'user_b'])
+      expect(res.body.participants.map((p: { userId: string }) => p.userId)).toEqual([
+        'user_a',
+        'user_b',
+      ])
     })
 
     it('rejects creating a conversation the caller is not part of', async () => {
@@ -83,7 +91,9 @@ describe('HTTP app', () => {
     })
 
     it('rejects a malformed participantIds field', async () => {
-      const res = await authed(app, 'post', '/conversations', 'user_a').send({ participantIds: 'user_b' })
+      const res = await authed(app, 'post', '/conversations', 'user_a').send({
+        participantIds: 'user_b',
+      })
       expect(res.status).toBe(400)
     })
 
@@ -103,8 +113,10 @@ describe('HTTP app', () => {
   })
 
   describe('GET /conversations', () => {
-    it('lists only the caller\'s conversations', async () => {
-      await authed(app, 'post', '/conversations', 'user_a').send({ participantIds: ['user_a', 'user_b'] })
+    it("lists only the caller's conversations", async () => {
+      await authed(app, 'post', '/conversations', 'user_a').send({
+        participantIds: ['user_a', 'user_b'],
+      })
 
       const res = await authed(app, 'get', '/conversations', 'user_a')
       expect(res.status).toBe(200)
@@ -130,13 +142,23 @@ describe('HTTP app', () => {
     it('sends and lists a message', async () => {
       const conversationId = await createConversation()
 
-      const sendRes = await authed(app, 'post', `/conversations/${conversationId}/messages`, 'user_a').send({
+      const sendRes = await authed(
+        app,
+        'post',
+        `/conversations/${conversationId}/messages`,
+        'user_a',
+      ).send({
         body: 'hello',
       })
       expect(sendRes.status).toBe(201)
       expect(sendRes.body.body).toBe('hello')
 
-      const listRes = await authed(app, 'get', `/conversations/${conversationId}/messages`, 'user_b')
+      const listRes = await authed(
+        app,
+        'get',
+        `/conversations/${conversationId}/messages`,
+        'user_b',
+      )
       expect(listRes.status).toBe(200)
       expect(listRes.body).toHaveLength(1)
     })
@@ -150,7 +172,9 @@ describe('HTTP app', () => {
       const before = readCounter((await request(app).get('/metrics')).text)
 
       const conversationId = await createConversation()
-      await authed(app, 'post', `/conversations/${conversationId}/messages`, 'user_a').send({ body: 'hello' })
+      await authed(app, 'post', `/conversations/${conversationId}/messages`, 'user_a').send({
+        body: 'hello',
+      })
 
       const after = readCounter((await request(app).get('/metrics')).text)
       expect(after).toBe(before + 1)
@@ -158,7 +182,12 @@ describe('HTTP app', () => {
 
     it('rejects a non-string body', async () => {
       const conversationId = await createConversation()
-      const res = await authed(app, 'post', `/conversations/${conversationId}/messages`, 'user_a').send({
+      const res = await authed(
+        app,
+        'post',
+        `/conversations/${conversationId}/messages`,
+        'user_a',
+      ).send({
         body: 42,
       })
       expect(res.status).toBe(400)
@@ -166,7 +195,12 @@ describe('HTTP app', () => {
 
     it('rejects a sender who is not a participant', async () => {
       const conversationId = await createConversation()
-      const res = await authed(app, 'post', `/conversations/${conversationId}/messages`, 'user_c').send({
+      const res = await authed(
+        app,
+        'post',
+        `/conversations/${conversationId}/messages`,
+        'user_c',
+      ).send({
         body: 'hi',
       })
       expect(res.status).toBe(403)
@@ -174,13 +208,23 @@ describe('HTTP app', () => {
 
     it('rejects an invalid limit query parameter', async () => {
       const conversationId = await createConversation()
-      const res = await authed(app, 'get', `/conversations/${conversationId}/messages?limit=0`, 'user_a')
+      const res = await authed(
+        app,
+        'get',
+        `/conversations/${conversationId}/messages?limit=0`,
+        'user_a',
+      )
       expect(res.status).toBe(400)
     })
 
     it('rejects an invalid before query parameter', async () => {
       const conversationId = await createConversation()
-      const res = await authed(app, 'get', `/conversations/${conversationId}/messages?before=not-a-date`, 'user_a')
+      const res = await authed(
+        app,
+        'get',
+        `/conversations/${conversationId}/messages?before=not-a-date`,
+        'user_a',
+      )
       expect(res.status).toBe(400)
     })
   })
@@ -196,8 +240,93 @@ describe('HTTP app', () => {
       expect(res.status).toBe(204)
 
       const getRes = await authed(app, 'get', `/conversations/${conversationId}`, 'user_a')
-      const participant = getRes.body.participants.find((p: { userId: string }) => p.userId === 'user_a')
+      const participant = getRes.body.participants.find(
+        (p: { userId: string }) => p.userId === 'user_a',
+      )
       expect(participant.lastReadAt).not.toBeNull()
+    })
+  })
+
+  describe('conversation gate wiring', () => {
+    it('allows creation with no gate configured, matching the pre-gate default', async () => {
+      const res = await authed(app, 'post', '/conversations', 'user_a').send({
+        participantIds: ['user_a', 'user_b'],
+      })
+      expect(res.status).toBe(201)
+    })
+
+    it('rejects creating a conversation the gate does not allow, even though the caller included themselves', async () => {
+      const gate: ConversationGate = {
+        async canCreateConversation() {
+          return false
+        },
+      }
+      const gatedApp = createHttpApp({
+        conversations: new InMemoryConversationStore(),
+        messages: new InMemoryMessageStore(),
+        tokenVerifier: new FixedTokenVerifier(),
+        conversationGate: gate,
+      })
+
+      // This is exactly the shape of the bypass the gate closes: user_a is
+      // in participantIds, so the router's own "must include yourself"
+      // check passes, and the only thing left standing between user_a and
+      // an unwanted conversation with user_b is the gate.
+      const res = await authed(gatedApp, 'post', '/conversations', 'user_a').send({
+        participantIds: ['user_a', 'user_b'],
+      })
+      expect(res.status).toBe(403)
+    })
+
+    it('allows creation when the gate says yes', async () => {
+      const gate: ConversationGate = {
+        async canCreateConversation() {
+          return true
+        },
+      }
+      const gatedApp = createHttpApp({
+        conversations: new InMemoryConversationStore(),
+        messages: new InMemoryMessageStore(),
+        tokenVerifier: new FixedTokenVerifier(),
+        conversationGate: gate,
+      })
+
+      const res = await authed(gatedApp, 'post', '/conversations', 'user_a').send({
+        participantIds: ['user_a', 'user_b'],
+      })
+      expect(res.status).toBe(201)
+    })
+
+    it('blocks sending on a conversation once the gate stops allowing it', async () => {
+      let allowed = true
+      const gate: ConversationGate = {
+        async canCreateConversation() {
+          return allowed
+        },
+      }
+      const gatedApp = createHttpApp({
+        conversations: new InMemoryConversationStore(),
+        messages: new InMemoryMessageStore(),
+        tokenVerifier: new FixedTokenVerifier(),
+        conversationGate: gate,
+      })
+
+      const createRes = await authed(gatedApp, 'post', '/conversations', 'user_a').send({
+        participantIds: ['user_a', 'user_b'],
+      })
+      expect(createRes.status).toBe(201)
+
+      allowed = false
+
+      const sendRes = await authed(
+        gatedApp,
+        'post',
+        `/conversations/${createRes.body.id}/messages`,
+        'user_a',
+      ).send({
+        body: 'still trying to talk',
+      })
+      expect(sendRes.status).toBe(403)
     })
   })
 
@@ -222,7 +351,9 @@ describe('HTTP app', () => {
       const createRes = await authed(busApp, 'post', '/conversations', 'user_a').send({
         participantIds: ['user_a', 'user_b'],
       })
-      await authed(busApp, 'post', `/conversations/${createRes.body.id}/messages`, 'user_a').send({ body: 'hi' })
+      await authed(busApp, 'post', `/conversations/${createRes.body.id}/messages`, 'user_a').send({
+        body: 'hi',
+      })
 
       expect(published).toHaveLength(1)
       expect(published[0]).toMatchObject({ body: 'hi' })

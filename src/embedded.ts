@@ -1,10 +1,22 @@
 import { MessagingService } from './core/index.js'
-import type { ConversationStore, MessageStore, TokenVerifier, VerifiedIdentity } from './ports/index.js'
+import type {
+  ConversationGate,
+  ConversationStore,
+  MessageStore,
+  TokenVerifier,
+  VerifiedIdentity,
+} from './ports/index.js'
 
 export interface EmbeddedMessagingConfig {
   conversations: ConversationStore
   messages: MessageStore
   tokenVerifier: TokenVerifier
+  /**
+   * Omit for a host with no relationship model of its own - any two
+   * authenticated callers may then talk. See ConversationGate in
+   * src/ports for what to implement to change that.
+   */
+  conversationGate?: ConversationGate
 }
 
 export interface EmbeddedMessaging {
@@ -23,6 +35,11 @@ export interface EmbeddedMessaging {
 export function createEmbeddedMessaging(config: EmbeddedMessagingConfig): EmbeddedMessaging {
   return {
     verifyToken: (token) => config.tokenVerifier.verify(token),
-    messaging: new MessagingService(config.conversations, config.messages),
+    messaging: new MessagingService(
+      config.conversations,
+      config.messages,
+      undefined,
+      config.conversationGate,
+    ),
   }
 }

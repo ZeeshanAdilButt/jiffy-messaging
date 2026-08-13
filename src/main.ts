@@ -4,13 +4,20 @@ import { Pool } from 'pg'
 import { pathToFileURL } from 'node:url'
 
 import { JwtTokenVerifier } from './adapters/jwt/index.js'
+import { HttpConversationGate } from './adapters/conversation-gate/index.js'
 import { RedisMessageBus } from './adapters/redis/index.js'
 import { logger } from './observability/logger.js'
+import type { ConversationGate } from './ports/index.js'
 import { createServer } from './server/create-server.js'
 
 export type JwtEnvConfig =
   | { kind: 'secret'; secret: string; issuer?: string; audience?: string; userIdClaim?: string }
   | { kind: 'jwks'; uri: string; issuer?: string; audience?: string; userIdClaim?: string }
+
+export interface ConversationGateEnvConfig {
+  url: string
+  secret: string
+}
 
 export interface ParsedEnv {
   databaseUrl: string
@@ -18,6 +25,8 @@ export interface ParsedEnv {
   jwt: JwtEnvConfig
   /** Unset means run as a single instance, using the in-process bus. */
   redisUrl?: string
+  /** Unset means any two authenticated callers may talk - see readMessagingGate below. */
+  conversationGate?: ConversationGateEnvConfig
 }
 
 /**
@@ -41,6 +50,7 @@ export function parseEnv(env: NodeJS.ProcessEnv): ParsedEnv {
   const audience = env.JWT_AUDIENCE
   const userIdClaim = env.JWT_USER_ID_CLAIM
   const redisUrl = env.REDIS_URL
+  const conversationGate = readConversationGateEnv(env)
 
   // JWT_JWKS_URI wins if both are set, since a platform that has moved to
   // rotating keys behind a JWKS endpoint has no reason to also keep a
@@ -50,6 +60,7 @@ export function parseEnv(env: NodeJS.ProcessEnv): ParsedEnv {
       databaseUrl,
       port,
       redisUrl,
+      conversationGate,
       jwt: { kind: 'jwks', uri: env.JWT_JWKS_URI, issuer, audience, userIdClaim },
     }
   }
@@ -59,11 +70,35 @@ export function parseEnv(env: NodeJS.ProcessEnv): ParsedEnv {
       databaseUrl,
       port,
       redisUrl,
+      conversationGate,
       jwt: { kind: 'secret', secret: env.JWT_SECRET, issuer, audience, userIdClaim },
     }
   }
 
   throw new Error('Set either JWT_JWKS_URI or JWT_SECRET')
+}
+
+/**
+ * CONVERSATION_GATE_URL and CONVERSATION_GATE_SECRET must be set together
+ * or not at all - a URL with no secret would call a host endpoint with no
+ * credential, and a secret with no URL has nothing to send it to. Either
+ * half-configured case is almost certainly a typo, so this fails fast
+ * rather than silently running unconfigured (any two callers may talk) or
+ * silently running with an empty credential (every call rejected).
+ */
+function readConversationGateEnv(env: NodeJS.ProcessEnv): ConversationGateEnvConfig | undefined {
+  const url = env.CONVERSATION_GATE_URL
+  const secret = env.CONVERSATION_GATE_SECRET
+
+  if (!url && !secret) return undefined
+
+  if (!url || !secret) {
+    throw new Error(
+      'CONVERSATION_GATE_URL and CONVERSATION_GATE_SECRET must both be set, or neither',
+    )
+  }
+
+  return { url, secret }
 }
 
 /**
@@ -100,10 +135,24 @@ export function missingJwtClaimChecks(jwt: JwtEnvConfig): string[] {
   return missing
 }
 
+/**
+ * Builds the real HTTP adapter from parsed config, or undefined when
+ * CONVERSATION_GATE_URL/SECRET are unset - MessagingService's own default
+ * (allow any two callers to talk) takes over in that case, so this stays
+ * undefined rather than reaching for a permissive gate of its own.
+ */
+export function buildConversationGate(
+  config: ConversationGateEnvConfig | undefined,
+): ConversationGate | undefined {
+  if (!config) return undefined
+  return new HttpConversationGate({ url: config.url, secret: config.secret })
+}
+
 export function run(): void {
   const config = parseEnv(process.env)
   const pool = new Pool({ connectionString: config.databaseUrl })
   const tokenVerifier = buildTokenVerifier(config.jwt)
+  const conversationGate = buildConversationGate(config.conversationGate)
 
   const missingJwtClaims = missingJwtClaimChecks(config.jwt)
   if (missingJwtClaims.length > 0) {
@@ -115,20 +164,26 @@ export function run(): void {
 
   // Two connections because a connection subscribed to a channel can't
   // also issue publish or other commands - see RedisMessageBus.
-  const redisClients = config.redisUrl ? [new Redis(config.redisUrl), new Redis(config.redisUrl)] : []
-  const messageBus = redisClients.length > 0 ? new RedisMessageBus(redisClients[0]!, redisClients[1]!) : undefined
+  const redisClients = config.redisUrl
+    ? [new Redis(config.redisUrl), new Redis(config.redisUrl)]
+    : []
+  const messageBus =
+    redisClients.length > 0 ? new RedisMessageBus(redisClients[0]!, redisClients[1]!) : undefined
 
-  const server = createServer({ pool, tokenVerifier, messageBus })
+  const server = createServer({ pool, tokenVerifier, messageBus, conversationGate })
 
   server.listen(config.port, () => {
     const mode = messageBus ? 'multi-instance, via Redis' : 'single instance, in-process'
-    logger.info({ port: config.port, mode }, 'jiffy-messaging listening')
+    const gate = conversationGate ? 'host-authorized' : 'unrestricted'
+    logger.info({ port: config.port, mode, conversationGate: gate }, 'jiffy-messaging listening')
   })
 
   const shutdown = (signal: string) => {
     logger.info({ signal }, 'shutting down')
     server.close(() => {
-      void Promise.all([pool.end(), ...redisClients.map((client) => client.quit())]).finally(() => process.exit(0))
+      void Promise.all([pool.end(), ...redisClients.map((client) => client.quit())]).finally(() =>
+        process.exit(0),
+      )
     })
   }
 
