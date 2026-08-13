@@ -3,6 +3,10 @@ dist/
 coverage/
 .env
 .env.local
+# Written next to the checkout on the deploy host: the configuration the
+# workflow just delivered, and the one it replaced. See docs/vps-deploy.md.
+.env.incoming
+.env.previous
 *.log
 .DS_Store
 k8s/secret.yaml
