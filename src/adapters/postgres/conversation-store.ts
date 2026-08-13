@@ -24,11 +24,17 @@ export class PostgresConversationStore implements ConversationStore {
       )
       const { id, created_at: createdAt } = firstRow(inserted.rows)
 
-      for (const userId of participantIds) {
-        await client.query('INSERT INTO conversation_participants (conversation_id, user_id) VALUES ($1, $2)', [
-          id,
-          userId,
-        ])
+      // One INSERT ... SELECT unnest(...) instead of one round trip per
+      // participant. The request-level cap on participantIds (see the
+      // HTTP router) is what actually bounds this; this is on top of that,
+      // not instead of it - anything embedding this store directly calls
+      // it with whatever array its own caller built.
+      if (participantIds.length > 0) {
+        await client.query(
+          `INSERT INTO conversation_participants (conversation_id, user_id)
+           SELECT $1, unnest($2::text[])`,
+          [id, participantIds],
+        )
       }
 
       await client.query('COMMIT')

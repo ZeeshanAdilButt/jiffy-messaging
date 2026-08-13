@@ -83,10 +83,35 @@ export function buildTokenVerifier(jwt: JwtEnvConfig): JwtTokenVerifier {
   return new JwtTokenVerifier(new TextEncoder().encode(jwt.secret), options)
 }
 
+/**
+ * JWT_ISSUER and JWT_AUDIENCE stay optional rather than required - making
+ * them mandatory would break any already-deployed caller that has not set
+ * them, and the one fix that actually matters (a token must carry an
+ * "exp" claim) does not depend on either being set; see
+ * JwtTokenVerifier.verifyPayload. But an unset issuer or audience means
+ * this service accepts a correctly-signed token issued for a completely
+ * different platform or a completely different consumer of the same
+ * platform, so it is worth a loud warning rather than a silent default.
+ */
+export function missingJwtClaimChecks(jwt: JwtEnvConfig): string[] {
+  const missing: string[] = []
+  if (!jwt.issuer) missing.push('JWT_ISSUER')
+  if (!jwt.audience) missing.push('JWT_AUDIENCE')
+  return missing
+}
+
 export function run(): void {
   const config = parseEnv(process.env)
   const pool = new Pool({ connectionString: config.databaseUrl })
   const tokenVerifier = buildTokenVerifier(config.jwt)
+
+  const missingJwtClaims = missingJwtClaimChecks(config.jwt)
+  if (missingJwtClaims.length > 0) {
+    logger.warn(
+      { missing: missingJwtClaims },
+      `${missingJwtClaims.join(' and ')} not set - this service will accept a correctly-signed token from any issuer or audience. Set both in production.`,
+    )
+  }
 
   // Two connections because a connection subscribed to a channel can't
   // also issue publish or other commands - see RedisMessageBus.

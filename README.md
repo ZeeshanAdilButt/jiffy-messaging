@@ -132,6 +132,19 @@ A runnable client exercising the REST and WebSocket flow end to end:
 make example-networked
 ```
 
+Running behind a reverse proxy (the documented VPS deployment uses nginx;
+a typical Kubernetes ingress is the same shape) is the expected setup, not
+an edge case: the standalone server trusts one hop of `X-Forwarded-For` by
+default, which is what lets the IP-based rate limiter (see
+[Configuration](#configuration)) see the actual client address instead of
+the proxy's own address for every request. If your proxy chain has more
+than one hop in front of this process, or you are exposing it directly
+with no proxy at all, that needs to change — see `trustProxy` on
+`createHttpApp`'s config, and make sure whatever sits in front of this
+service is actually setting `X-Forwarded-For` itself rather than passing
+through whatever a client sent (nginx does this by default; verify it if
+you are fronting with something else).
+
 ## HTTP API
 
 Every route below takes `Authorization: Bearer <token>`, verified through
@@ -145,6 +158,12 @@ the `TokenVerifier` your deployment configures.
 | POST   | /conversations/:id/messages | `{ body: string }`                  | 201, message        |
 | GET    | /conversations/:id/messages | `?limit=50&before=<ISO date>`       | 200, message[]      |
 | POST   | /conversations/:id/read     |                                     | 204                 |
+
+`participantIds` on POST /conversations is capped at 50 entries; a longer
+array gets a 400 rather than being accepted and inserted one row at a
+time. GET .../messages defaults to `limit=50` when omitted and clamps any
+larger value down to 200 - there is no way to ask for a whole
+conversation's history in one request.
 
 Errors: 400 malformed input, 401 missing or invalid token, 403 not a
 participant, 404 unknown conversation, 429 rate limited.
@@ -165,7 +184,10 @@ ws://host:8080/?token=<token>
 
 The token travels as a query parameter because browsers cannot set custom
 headers on a WebSocket handshake. It is verified during the upgrade — an
-unauthenticated caller never gets an open socket.
+unauthenticated caller never gets an open socket. If the token carries an
+expiration, the connection is closed once it is reached, even if the
+socket was still otherwise idle and open - a live connection does not
+outlive the token that opened it.
 
 A connected client receives every new message in every conversation it
 participates in, pushed as JSON:
@@ -190,11 +212,20 @@ Delivery is push-only; send messages over the REST API.
 | `JWT_SECRET`        | one of these two | HMAC secret for token verification                           |
 | `JWT_JWKS_URI`      |                  | JWKS endpoint for token verification, wins if both are set   |
 | `PORT`              |                  | Defaults to 8080                                             |
-| `JWT_ISSUER`        |                  | Expected `iss` claim, if your tokens set one                 |
-| `JWT_AUDIENCE`      |                  | Expected `aud` claim, if your tokens set one                 |
+| `JWT_ISSUER`        | recommended      | Expected `iss` claim. Unset logs a warning at startup         |
+| `JWT_AUDIENCE`      | recommended      | Expected `aud` claim. Unset logs a warning at startup         |
 | `JWT_USER_ID_CLAIM` |                  | Claim holding the user id, defaults to `sub`                 |
 | `REDIS_URL`         |                  | Required to run more than one instance, see below            |
 | `LOG_LEVEL`         |                  | Defaults to `info`                                           |
+
+A token with no `exp` (expiration) claim is always rejected, regardless of
+any of the above — that is not configurable. `JWT_ISSUER` and
+`JWT_AUDIENCE` stay optional rather than required, since making them
+mandatory would break a deployment that has not set them yet, but leaving
+both unset means this service accepts a correctly-signed token issued for
+a completely different platform or consumer as long as the signature
+checks out. Set both in production; the process logs a warning at startup
+if either is missing.
 
 ## Running more than one instance
 

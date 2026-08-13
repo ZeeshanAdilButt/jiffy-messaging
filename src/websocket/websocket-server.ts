@@ -4,7 +4,7 @@ import { WebSocketServer } from 'ws'
 import type { Message } from '../domain/index.js'
 import { logger } from '../observability/logger.js'
 import { websocketConnectionsActive } from '../observability/metrics.js'
-import type { ConversationStore, MessageBus, TokenVerifier } from '../ports/index.js'
+import type { ConversationStore, MessageBus, TokenVerifier, VerifiedIdentity } from '../ports/index.js'
 import { ConnectionRateLimiter } from './connection-rate-limiter.js'
 import { ConnectionRegistry } from './connection-registry.js'
 
@@ -49,7 +49,11 @@ async function deliverToParticipants(
  *
  * Verification happens during the upgrade, before the handshake completes
  * - handleUpgrade is only called once a token has verified, so an
- * unauthenticated caller never gets a live socket, not even briefly.
+ * unauthenticated caller never gets a live socket, not even briefly. That
+ * check is not repeated afterward: instead, if the verified identity
+ * reports an expiresAt, the connection is closed once that time arrives,
+ * so a socket does not keep running on a token that would no longer pass
+ * verification if presented again.
  *
  * This assumes it owns every upgrade event on the given server, which
  * holds for the standalone server in src/server.
@@ -81,21 +85,44 @@ export function attachWebSocketServer(config: AttachWebSocketServerConfig): Conn
         return
       }
 
-      let userId: string
+      let identity: VerifiedIdentity
       try {
-        userId = (await config.tokenVerifier.verify(token)).userId
+        identity = await config.tokenVerifier.verify(token)
       } catch {
         socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
         socket.destroy()
         return
       }
+      const { userId, expiresAt } = identity
 
       wss.handleUpgrade(req, socket, head, (ws) => {
         registry.add(userId, ws)
         websocketConnectionsActive.inc()
         logger.info({ userId }, 'websocket connection opened')
 
+        // Verification above runs once, at connect time, on the token in
+        // the query string. Without something below, a socket opened
+        // with a valid token stays open and keeps receiving messages past
+        // the moment that same token's own exp claim says it should stop
+        // being trusted - the exp requirement added in token-verifier.ts
+        // only actually bounds a long-lived connection's lifetime if
+        // something here acts on it. expiresAt is undefined for a
+        // TokenVerifier implementation that does not report one, in which
+        // case this is a no-op and behaves exactly as before.
+        let expiryTimer: NodeJS.Timeout | undefined
+        if (expiresAt) {
+          const msUntilExpiry = expiresAt.getTime() - Date.now()
+          expiryTimer = setTimeout(
+            () => {
+              logger.info({ userId }, 'closing websocket connection: token expired')
+              ws.close(4401, 'token expired')
+            },
+            Math.max(msUntilExpiry, 0),
+          )
+        }
+
         ws.on('close', () => {
+          if (expiryTimer) clearTimeout(expiryTimer)
           registry.remove(userId, ws)
           websocketConnectionsActive.dec()
           logger.info({ userId }, 'websocket connection closed')

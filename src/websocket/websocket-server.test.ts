@@ -18,6 +18,18 @@ class FixedTokenVerifier implements TokenVerifier {
   }
 }
 
+/** Reports whatever expiresAt the test configures it with, so the expiry-driven close path can be exercised without waiting on a real JWT. */
+class ExpiringTokenVerifier implements TokenVerifier {
+  constructor(private readonly expiresAt: Date) {}
+
+  async verify(token: string): Promise<VerifiedIdentity> {
+    if (token === 'user_a') {
+      return { userId: token, expiresAt: this.expiresAt }
+    }
+    throw new Error('unknown token')
+  }
+}
+
 async function listen(server: Server): Promise<number> {
   await new Promise<void>((resolve) => server.listen(0, resolve))
   const address = server.address()
@@ -173,5 +185,67 @@ describe('attachWebSocketServer connection rate limiting', () => {
     const second = connect('user_a')
     const [error] = await once(second, 'error')
     expect(String(error)).toContain('429')
+  })
+})
+
+describe('attachWebSocketServer token expiry', () => {
+  let server: Server
+  let port: number
+  const openSockets: WebSocket[] = []
+
+  afterEach(async () => {
+    for (const socket of openSockets) {
+      socket.close()
+    }
+    openSockets.length = 0
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  })
+
+  function connect(token: string): WebSocket {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/?token=${token}`)
+    openSockets.push(socket)
+    return socket
+  }
+
+  it('closes an open connection once the token it was opened with expires', async () => {
+    server = createServer()
+    attachWebSocketServer({
+      server,
+      tokenVerifier: new ExpiringTokenVerifier(new Date(Date.now() + 50)),
+      conversations: new InMemoryConversationStore(),
+      messageBus: new InProcessMessageBus(),
+    })
+    port = await listen(server)
+
+    const socket = connect('user_a')
+    await once(socket, 'open')
+    expect(socket.readyState).toBe(WebSocket.OPEN)
+
+    const [code] = await once(socket, 'close')
+    expect(code).toBe(4401)
+  })
+
+  it('does not schedule a close for a token verifier that reports no expiry', async () => {
+    server = createServer()
+    attachWebSocketServer({
+      server,
+      tokenVerifier: new FixedTokenVerifier(),
+      conversations: new InMemoryConversationStore(),
+      messageBus: new InProcessMessageBus(),
+    })
+    port = await listen(server)
+
+    const socket = connect('user_a')
+    await once(socket, 'open')
+
+    // No 'close' event within a window well past what the expiry test
+    // above waits - if a close were scheduled by mistake for a verifier
+    // that never set expiresAt, this would catch it.
+    const closed = await Promise.race([
+      once(socket, 'close').then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 200)),
+    ])
+    expect(closed).toBe(false)
+    expect(socket.readyState).toBe(WebSocket.OPEN)
   })
 })

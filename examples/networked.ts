@@ -26,7 +26,14 @@ interface Message {
 }
 
 function signToken(userId: string): Promise<string> {
-  return new SignJWT({ sub: userId }).setProtectedHeader({ alg: 'HS256' }).setIssuedAt().sign(secret)
+  // A short, explicit expiration is not optional: the service rejects any
+  // token that has no "exp" claim at all, and a real one should not
+  // outlive the session it was issued for anyway.
+  return new SignJWT({ sub: userId })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
+    .setExpirationTime('15m')
+    .sign(secret)
 }
 
 async function call<T>(path: string, token: string, init: RequestInit = {}): Promise<T> {
