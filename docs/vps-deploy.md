@@ -130,6 +130,8 @@ this repository, not the platform API's.
 | `REDIS_URL`    | no       | Only once there is a second instance. A single instance does not need it and does not benefit from it. See [deployment.md](./deployment.md#more-than-one-instance)                                                        |
 | `CONVERSATION_GATE_URL` | no | The platform API's internal authorization callback (e.g. `https://api.goalslot.io/internal/messaging/can-create-conversation`). Unset means every authenticated user may open a conversation with anyone, which is the correct default for an integrator with no relationship model of its own, but not for the platform API |
 | `CONVERSATION_GATE_SECRET` | no, but required alongside `CONVERSATION_GATE_URL` | A separate shared secret from `JWT_SECRET`, used only to authenticate this service's server-to-server callback to the gate URL. Never issued to end users |
+| `MESSAGE_NOTIFY_URL` | no | The platform API's internal notification callback (e.g. `https://api.goalslot.io/internal/messaging/on-message-sent`), called after every message send so the platform can push its own notification to the recipients. Unset means no notification fires - the message still sends, delivery is just silent beyond the WebSocket |
+| `MESSAGE_NOTIFY_SECRET` | no, but required alongside `MESSAGE_NOTIFY_URL` | A separate shared secret from both `JWT_SECRET` and `CONVERSATION_GATE_SECRET` - this callback and the conversation gate are different capabilities, and a caller with one should not automatically have the other |
 
 `JWT_SECRET` is the one worth being careful with. A trailing newline or
 space picked up while pasting is enough to make every authenticated

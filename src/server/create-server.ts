@@ -4,7 +4,7 @@ import type { Pool } from 'pg'
 import { InProcessMessageBus } from '../adapters/in-process/index.js'
 import { PostgresConversationStore, PostgresMessageStore } from '../adapters/postgres/index.js'
 import { createHttpApp } from '../http/index.js'
-import type { ConversationGate, MessageBus, TokenVerifier } from '../ports/index.js'
+import type { ConversationGate, MessageBus, MessageNotifier, TokenVerifier } from '../ports/index.js'
 import { attachWebSocketServer } from '../websocket/index.js'
 
 export interface CreateServerConfig {
@@ -24,6 +24,12 @@ export interface CreateServerConfig {
    * platform instead.
    */
   conversationGate?: ConversationGate
+  /**
+   * Omit to send no message notifications. Pass an HttpMessageNotifier
+   * (see src/adapters/message-notifier) to have the host platform push
+   * its own notification whenever a message is sent.
+   */
+  messageNotifier?: MessageNotifier
   /** Origins allowed to call the REST API from a browser - see createHttpApp. */
   corsOrigins: string[]
 }
@@ -50,6 +56,7 @@ export function createServer(config: CreateServerConfig): Server {
     tokenVerifier: config.tokenVerifier,
     messageBus,
     conversationGate: config.conversationGate,
+    messageNotifier: config.messageNotifier,
     corsOrigins: config.corsOrigins,
     readinessCheck: async () => {
       await config.pool.query('SELECT 1')

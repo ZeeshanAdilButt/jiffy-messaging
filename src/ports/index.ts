@@ -3,3 +3,4 @@ export type { MessageStore, NewMessage, ListMessagesOptions } from './message-st
 export type { TokenVerifier, VerifiedIdentity } from './token-verifier.js'
 export type { MessageBus } from './message-bus.js'
 export type { ConversationGate } from './conversation-gate.js'
+export type { MessageNotifier } from './message-notifier.js'

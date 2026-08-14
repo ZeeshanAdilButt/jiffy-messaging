@@ -8,6 +8,7 @@ import type {
   ConversationGate,
   ConversationStore,
   MessageBus,
+  MessageNotifier,
   MessageStore,
   TokenVerifier,
 } from '../ports/index.js'
@@ -37,6 +38,13 @@ export interface HttpAppConfig {
    * in src/ports for what a host implements to change that.
    */
   conversationGate?: ConversationGate
+  /**
+   * Fire-and-forget notification hook, called after every message send so
+   * a host can push its own notification to the recipients. Omit it and
+   * MessagingService defaults to doing nothing - see MessageNotifier in
+   * src/ports for what a host implements to change that.
+   */
+  messageNotifier?: MessageNotifier
   /**
    * Every real caller of this REST surface is a browser making a
    * cross-origin request (this service and the web app it serves are on
@@ -86,6 +94,7 @@ export function createHttpApp(config: HttpAppConfig): Express {
     config.messages,
     config.messageBus,
     config.conversationGate,
+    config.messageNotifier,
   )
 
   const app = express()
