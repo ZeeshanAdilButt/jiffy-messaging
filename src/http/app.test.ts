@@ -165,6 +165,16 @@ describe('HTTP app', () => {
       const res = await authed(app, 'get', '/conversations/missing', 'user_a')
       expect(res.status).toBe(404)
     })
+
+    it('rejects a caller who is not a participant', async () => {
+      const created = await authed(app, 'post', '/conversations', 'user_a').send({
+        participantIds: ['user_a', 'user_b'],
+      })
+      const conversationId = created.body.id as string
+
+      const res = await authed(app, 'get', `/conversations/${conversationId}`, 'user_c')
+      expect(res.status).toBe(403)
+    })
   })
 
   describe('messages', () => {
