@@ -5,9 +5,10 @@ import { pathToFileURL } from 'node:url'
 
 import { JwtTokenVerifier } from './adapters/jwt/index.js'
 import { HttpConversationGate } from './adapters/conversation-gate/index.js'
+import { HttpMessageNotifier } from './adapters/message-notifier/index.js'
 import { RedisMessageBus } from './adapters/redis/index.js'
 import { logger } from './observability/logger.js'
-import type { ConversationGate } from './ports/index.js'
+import type { ConversationGate, MessageNotifier } from './ports/index.js'
 import { createServer } from './server/create-server.js'
 
 export type JwtEnvConfig =
@@ -15,6 +16,11 @@ export type JwtEnvConfig =
   | { kind: 'jwks'; uri: string; issuer?: string; audience?: string; userIdClaim?: string }
 
 export interface ConversationGateEnvConfig {
+  url: string
+  secret: string
+}
+
+export interface MessageNotifyEnvConfig {
   url: string
   secret: string
 }
@@ -27,6 +33,8 @@ export interface ParsedEnv {
   redisUrl?: string
   /** Unset means any two authenticated callers may talk - see readMessagingGate below. */
   conversationGate?: ConversationGateEnvConfig
+  /** Unset means no notification fires when a message is sent - see readMessageNotifyEnv below. */
+  messageNotify?: MessageNotifyEnvConfig
   /** Origins allowed to call the REST API from a browser - see readCorsOriginEnv below. */
   corsOrigins: string[]
 }
@@ -53,6 +61,7 @@ export function parseEnv(env: NodeJS.ProcessEnv): ParsedEnv {
   const userIdClaim = env.JWT_USER_ID_CLAIM
   const redisUrl = env.REDIS_URL
   const conversationGate = readConversationGateEnv(env)
+  const messageNotify = readMessageNotifyEnv(env)
 
   // JWT_JWKS_URI wins if both are set, since a platform that has moved to
   // rotating keys behind a JWKS endpoint has no reason to also keep a
@@ -68,7 +77,7 @@ export function parseEnv(env: NodeJS.ProcessEnv): ParsedEnv {
 
   const corsOrigins = readCorsOriginEnv(env)
 
-  return { databaseUrl, port, redisUrl, conversationGate, corsOrigins, jwt }
+  return { databaseUrl, port, redisUrl, conversationGate, messageNotify, corsOrigins, jwt }
 }
 
 /**
@@ -121,6 +130,26 @@ function readConversationGateEnv(env: NodeJS.ProcessEnv): ConversationGateEnvCon
 }
 
 /**
+ * MESSAGE_NOTIFY_URL and MESSAGE_NOTIFY_SECRET must be set together or not
+ * at all - same reasoning as readConversationGateEnv above, and a
+ * deliberately separate secret from CONVERSATION_GATE_SECRET: this
+ * endpoint and the gate endpoint are different capabilities on the host,
+ * and a caller with one should not automatically have the other.
+ */
+function readMessageNotifyEnv(env: NodeJS.ProcessEnv): MessageNotifyEnvConfig | undefined {
+  const url = env.MESSAGE_NOTIFY_URL
+  const secret = env.MESSAGE_NOTIFY_SECRET
+
+  if (!url && !secret) return undefined
+
+  if (!url || !secret) {
+    throw new Error('MESSAGE_NOTIFY_URL and MESSAGE_NOTIFY_SECRET must both be set, or neither')
+  }
+
+  return { url, secret }
+}
+
+/**
  * Builds the real JWT adapter from parsed config. Whether the platform in
  * front of this service signs with a static secret or rotates keys behind
  * a JWKS endpoint is exactly the choice JwtTokenVerifier's constructor was
@@ -167,11 +196,25 @@ export function buildConversationGate(
   return new HttpConversationGate({ url: config.url, secret: config.secret })
 }
 
+/**
+ * Builds the real HTTP adapter from parsed config, or undefined when
+ * MESSAGE_NOTIFY_URL/SECRET are unset - MessagingService's own default
+ * (send no notification) takes over in that case, so this stays undefined
+ * rather than reaching for a no-op notifier of its own.
+ */
+export function buildMessageNotifier(
+  config: MessageNotifyEnvConfig | undefined,
+): MessageNotifier | undefined {
+  if (!config) return undefined
+  return new HttpMessageNotifier({ url: config.url, secret: config.secret })
+}
+
 export function run(): void {
   const config = parseEnv(process.env)
   const pool = new Pool({ connectionString: config.databaseUrl })
   const tokenVerifier = buildTokenVerifier(config.jwt)
   const conversationGate = buildConversationGate(config.conversationGate)
+  const messageNotifier = buildMessageNotifier(config.messageNotify)
 
   const missingJwtClaims = missingJwtClaimChecks(config.jwt)
   if (missingJwtClaims.length > 0) {
@@ -189,12 +232,23 @@ export function run(): void {
   const messageBus =
     redisClients.length > 0 ? new RedisMessageBus(redisClients[0]!, redisClients[1]!) : undefined
 
-  const server = createServer({ pool, tokenVerifier, messageBus, conversationGate, corsOrigins: config.corsOrigins })
+  const server = createServer({
+    pool,
+    tokenVerifier,
+    messageBus,
+    conversationGate,
+    messageNotifier,
+    corsOrigins: config.corsOrigins,
+  })
 
   server.listen(config.port, () => {
     const mode = messageBus ? 'multi-instance, via Redis' : 'single instance, in-process'
     const gate = conversationGate ? 'host-authorized' : 'unrestricted'
-    logger.info({ port: config.port, mode, conversationGate: gate }, 'jiffy-messaging listening')
+    const notify = messageNotifier ? 'enabled' : 'disabled'
+    logger.info(
+      { port: config.port, mode, conversationGate: gate, messageNotify: notify },
+      'jiffy-messaging listening',
+    )
   })
 
   const shutdown = (signal: string) => {

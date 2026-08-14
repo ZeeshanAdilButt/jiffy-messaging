@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import { InMemoryConversationStore, InMemoryMessageStore } from '../adapters/in-memory/index.js'
 import type { Message } from '../domain/index.js'
-import type { ConversationGate, MessageBus } from '../ports/index.js'
+import type { ConversationGate, MessageBus, MessageNotifier } from '../ports/index.js'
 import {
   ConversationNotAllowedError,
   ConversationNotFoundError,
@@ -23,6 +23,14 @@ class RecordingGate implements ConversationGate {
 
   setAllowed(allowed: boolean): void {
     this.allowed = allowed
+  }
+}
+
+class RecordingNotifier implements MessageNotifier {
+  calls: Array<{ message: Message; recipientIds: string[] }> = []
+
+  async notify(message: Message, recipientIds: string[]): Promise<void> {
+    this.calls.push({ message, recipientIds: [...recipientIds] })
   }
 }
 
@@ -51,6 +59,22 @@ describe('MessagingService', () => {
 
     it('returns an empty array for a user in no conversations', async () => {
       await expect(service.listConversations('nobody')).resolves.toEqual([])
+    })
+
+    it('attaches null lastMessage to a conversation nobody has sent into yet', async () => {
+      await service.createConversation('a', ['a', 'b'])
+
+      const [conversation] = await service.listConversations('a')
+      expect(conversation!.lastMessage).toBeNull()
+    })
+
+    it('attaches the most recent message as lastMessage', async () => {
+      const conversation = await service.createConversation('a', ['a', 'b'])
+      await service.sendMessage({ conversationId: conversation.id, senderId: 'a', body: 'first' })
+      await service.sendMessage({ conversationId: conversation.id, senderId: 'b', body: 'second' })
+
+      const [listed] = await service.listConversations('a')
+      expect(listed!.lastMessage?.body).toBe('second')
     })
   })
 
@@ -130,6 +154,46 @@ describe('MessagingService', () => {
       await expect(
         service.sendMessage({ conversationId: 'missing', senderId: 'a', body: 'hi' }),
       ).rejects.toThrow(ConversationNotFoundError)
+    })
+
+    it('notifies every recipient except the sender', async () => {
+      const notifier = new RecordingNotifier()
+      const notifyingService = new MessagingService(
+        new InMemoryConversationStore(),
+        new InMemoryMessageStore(),
+        undefined,
+        undefined,
+        notifier,
+      )
+      const conversation = await notifyingService.createConversation('a', ['a', 'b', 'c'])
+
+      const message = await notifyingService.sendMessage({
+        conversationId: conversation.id,
+        senderId: 'a',
+        body: 'hi',
+      })
+
+      expect(notifier.calls).toEqual([{ message, recipientIds: ['b', 'c'] }])
+    })
+
+    it('still returns the message when the notifier rejects', async () => {
+      const notifier: MessageNotifier = {
+        async notify() {
+          throw new Error('notify endpoint unreachable')
+        },
+      }
+      const notifyingService = new MessagingService(
+        new InMemoryConversationStore(),
+        new InMemoryMessageStore(),
+        undefined,
+        undefined,
+        notifier,
+      )
+      const conversation = await notifyingService.createConversation('a', ['a', 'b'])
+
+      await expect(
+        notifyingService.sendMessage({ conversationId: conversation.id, senderId: 'a', body: 'hi' }),
+      ).resolves.toMatchObject({ body: 'hi' })
     })
   })
 

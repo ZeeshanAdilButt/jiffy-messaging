@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest'
 
 import { JwtTokenVerifier } from './adapters/jwt/index.js'
 import { HttpConversationGate } from './adapters/conversation-gate/index.js'
-import { buildConversationGate, buildTokenVerifier, missingJwtClaimChecks, parseEnv } from './main.js'
+import { HttpMessageNotifier } from './adapters/message-notifier/index.js'
+import {
+  buildConversationGate,
+  buildMessageNotifier,
+  buildTokenVerifier,
+  missingJwtClaimChecks,
+  parseEnv,
+} from './main.js'
 
 const BASE_ENV = {
   DATABASE_URL: 'postgres://localhost/test',
@@ -135,6 +142,34 @@ describe('parseEnv', () => {
       'CONVERSATION_GATE_URL and CONVERSATION_GATE_SECRET must both be set, or neither',
     )
   })
+
+  it('leaves messageNotify unset when neither notify variable is set', () => {
+    expect(parseEnv(BASE_ENV).messageNotify).toBeUndefined()
+  })
+
+  it('carries messageNotify through when both variables are set', () => {
+    const config = parseEnv({
+      ...BASE_ENV,
+      MESSAGE_NOTIFY_URL: 'https://api.example.com/internal/messaging/on-message-sent',
+      MESSAGE_NOTIFY_SECRET: 'shared-secret',
+    })
+    expect(config.messageNotify).toEqual({
+      url: 'https://api.example.com/internal/messaging/on-message-sent',
+      secret: 'shared-secret',
+    })
+  })
+
+  it('throws when only MESSAGE_NOTIFY_URL is set', () => {
+    expect(() =>
+      parseEnv({ ...BASE_ENV, MESSAGE_NOTIFY_URL: 'https://api.example.com/notify' }),
+    ).toThrow('MESSAGE_NOTIFY_URL and MESSAGE_NOTIFY_SECRET must both be set, or neither')
+  })
+
+  it('throws when only MESSAGE_NOTIFY_SECRET is set', () => {
+    expect(() => parseEnv({ ...BASE_ENV, MESSAGE_NOTIFY_SECRET: 'shared-secret' })).toThrow(
+      'MESSAGE_NOTIFY_URL and MESSAGE_NOTIFY_SECRET must both be set, or neither',
+    )
+  })
 })
 
 describe('buildConversationGate', () => {
@@ -148,6 +183,20 @@ describe('buildConversationGate', () => {
       secret: 'shared-secret',
     })
     expect(gate).toBeInstanceOf(HttpConversationGate)
+  })
+})
+
+describe('buildMessageNotifier', () => {
+  it("returns undefined when unconfigured, deferring to MessagingService's own default", () => {
+    expect(buildMessageNotifier(undefined)).toBeUndefined()
+  })
+
+  it('builds an HttpMessageNotifier when configured', () => {
+    const notifier = buildMessageNotifier({
+      url: 'https://api.example.com/internal/messaging/on-message-sent',
+      secret: 'shared-secret',
+    })
+    expect(notifier).toBeInstanceOf(HttpMessageNotifier)
   })
 })
 

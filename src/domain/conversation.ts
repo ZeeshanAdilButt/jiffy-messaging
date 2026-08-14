@@ -3,6 +3,8 @@
 // decision belongs to whatever created it. See the ConversationGate port
 // in src/ports/conversation-gate.ts for where that check actually happens.
 
+import type { Message } from './message.js'
+
 export interface ConversationParticipant {
   userId: string
   /**
@@ -19,6 +21,17 @@ export interface Conversation {
   id: string
   participants: ConversationParticipant[]
   createdAt: Date
+  /**
+   * The most recent message in this conversation, or null when none has
+   * been sent yet. Attached by MessagingService.listConversations (see
+   * core/messaging-service.ts) rather than by ConversationStore itself -
+   * ConversationStore has no dependency on MessageStore, and the two stay
+   * that way. Omitted (not present at all) from a freshly created
+   * conversation and from `getConversation`/`findById`, which don't need
+   * it; only the list endpoint populates it, for the conversation-list
+   * preview.
+   */
+  lastMessage?: Message | null
 }
 
 export function isParticipant(conversation: Conversation, userId: string): boolean {
