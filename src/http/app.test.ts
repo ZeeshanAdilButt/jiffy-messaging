@@ -43,6 +43,7 @@ describe('HTTP app', () => {
       conversations: new InMemoryConversationStore(),
       messages: new InMemoryMessageStore(),
       tokenVerifier: new FixedTokenVerifier(),
+      corsOrigins: ['http://localhost:3000'],
     })
   })
 
@@ -67,6 +68,41 @@ describe('HTTP app', () => {
     it('does not require auth for /metrics', async () => {
       const res = await request(app).get('/metrics')
       expect(res.status).toBe(200)
+    })
+  })
+
+  // This is the class of bug that made the whole REST API unreachable from
+  // a browser with no CORS middleware at all: a preflight OPTIONS request
+  // carries no Authorization header (that's the point of preflight), so if
+  // auth middleware ran first it 401'd every preflight and the browser
+  // blocked the real request before sending it - see corsOrigins on
+  // HttpAppConfig for the full explanation.
+  describe('CORS', () => {
+    it('answers a preflight OPTIONS request without requiring auth', async () => {
+      const res = await request(app)
+        .options('/conversations')
+        .set('Origin', 'http://localhost:3000')
+        .set('Access-Control-Request-Method', 'GET')
+        .set('Access-Control-Request-Headers', 'authorization')
+
+      expect(res.status).toBeLessThan(300)
+      expect(res.headers['access-control-allow-origin']).toBe('http://localhost:3000')
+    })
+
+    it('stamps Access-Control-Allow-Origin on a real request from an allowed origin', async () => {
+      const res = await authed(app, 'get', '/conversations', 'user_a').set(
+        'Origin',
+        'http://localhost:3000',
+      )
+      expect(res.headers['access-control-allow-origin']).toBe('http://localhost:3000')
+    })
+
+    it('does not stamp Access-Control-Allow-Origin for a disallowed origin', async () => {
+      const res = await authed(app, 'get', '/conversations', 'user_a').set(
+        'Origin',
+        'https://not-allowed.example.com',
+      )
+      expect(res.headers['access-control-allow-origin']).toBeUndefined()
     })
   })
 
@@ -266,6 +302,7 @@ describe('HTTP app', () => {
         messages: new InMemoryMessageStore(),
         tokenVerifier: new FixedTokenVerifier(),
         conversationGate: gate,
+        corsOrigins: ['http://localhost:3000'],
       })
 
       // This is exactly the shape of the bypass the gate closes: user_a is
@@ -289,6 +326,7 @@ describe('HTTP app', () => {
         messages: new InMemoryMessageStore(),
         tokenVerifier: new FixedTokenVerifier(),
         conversationGate: gate,
+        corsOrigins: ['http://localhost:3000'],
       })
 
       const res = await authed(gatedApp, 'post', '/conversations', 'user_a').send({
@@ -309,6 +347,7 @@ describe('HTTP app', () => {
         messages: new InMemoryMessageStore(),
         tokenVerifier: new FixedTokenVerifier(),
         conversationGate: gate,
+        corsOrigins: ['http://localhost:3000'],
       })
 
       const createRes = await authed(gatedApp, 'post', '/conversations', 'user_a').send({
@@ -346,6 +385,7 @@ describe('HTTP app', () => {
         messages: new InMemoryMessageStore(),
         tokenVerifier: new FixedTokenVerifier(),
         messageBus: bus,
+        corsOrigins: ['http://localhost:3000'],
       })
 
       const createRes = await authed(busApp, 'post', '/conversations', 'user_a').send({

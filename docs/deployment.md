@@ -98,7 +98,7 @@ offers one and your instance count makes that worthwhile.
 ## Configuration
 
 Everything the process reads, and nothing else. `DATABASE_URL`, `PORT`,
-the `JWT_*` set, and `REDIS_URL` are parsed by `parseEnv` in
+the `JWT_*` set, `REDIS_URL`, and `CORS_ORIGIN` are parsed by `parseEnv` in
 [src/main.ts](../src/main.ts), which runs before anything connects to
 anything, so a bad value fails the start with a named error instead of
 half-booting. `LOG_LEVEL` is read separately by
@@ -110,6 +110,7 @@ time.
 | `DATABASE_URL`      | yes              |         | Postgres connection string for this service's own database |
 | `JWT_SECRET`        | one of these two |         | HMAC secret used to verify incoming tokens                 |
 | `JWT_JWKS_URI`      | one of these two |         | JWKS endpoint, used instead of a secret                    |
+| `CORS_ORIGIN`       | yes              |         | Comma-separated browser origins allowed to call the REST API - see [Cross-origin requests from a browser](#cross-origin-requests-from-a-browser) |
 | `JWT_ISSUER`        | no               | unset   | Expected `iss` claim, checked only when set                |
 | `JWT_AUDIENCE`      | no               | unset   | Expected `aud` claim, checked only when set                |
 | `JWT_USER_ID_CLAIM` | no               | `sub`   | Claim carrying the platform's user id                      |
@@ -378,21 +379,35 @@ proxy.
 
 ### Cross-origin requests from a browser
 
-The REST surface sends no CORS headers. There is no `cors` middleware in
-the stack, which means a browser on a different origin cannot call it
-directly: the preflight gets no `Access-Control-Allow-Origin` and the
-request never leaves the browser.
+The REST surface is meant to be called directly by a browser on a
+different origin from this service - the platform's own web app mints a
+messaging token server-side (so `JWT_SECRET` never reaches the client) and
+then calls `/conversations` and friends from the browser itself, the same
+origin the WebSocket already connects from. `CORS_ORIGIN` (see Repository
+variables in [vps-deploy.md](./vps-deploy.md#repository-variables)) is
+required for exactly this: it is a comma-separated allowlist passed to the
+`cors` middleware, mounted ahead of everything else in `createHttpApp` so
+the preflight OPTIONS request - which carries no bearer token, by design -
+is answered before it can reach the auth middleware and get 401'd.
 
-That is usually not a problem, because of how this tends to be integrated.
-The platform's own API calls this service server to server, on the
-loopback address, with a token minted for the acting user, and the browser
-talks only to the platform's API. The browser then opens the WebSocket
-directly against this service, and WebSocket handshakes are not subject to
-CORS, so that works.
+Authorization is not a CORS-safelisted header, so every authenticated call
+from a browser is preceded by a preflight. With `CORS_ORIGIN` unset (or
+pointed at the wrong origin), that preflight either 401s or succeeds with
+no `Access-Control-Allow-Origin` on the response - either way the browser
+blocks the real request before it is ever sent, and it looks like a dead
+network connection from the client, not an auth failure.
 
-If you do want a browser calling the REST API directly, add the headers at
-the proxy. Do not reach for a wildcard; the surface is authenticated and
-every route is a real user's private data.
+Do not reach for a wildcard origin; the surface is authenticated and every
+route is a real user's private data. List the exact origins that need to
+reach it.
+
+If instead your integration calls this service server to server - the
+platform's own API, on the loopback address, with a token minted for the
+acting user, and only the WebSocket talks to this service directly from a
+browser - CORS_ORIGIN still has to be set to something for the process to
+start, but nothing needs to be listed in it beyond what genuinely calls
+the REST API from a browser; WebSocket handshakes are not subject to CORS
+either way.
 
 ## Health and readiness
 

@@ -4,7 +4,11 @@ import { JwtTokenVerifier } from './adapters/jwt/index.js'
 import { HttpConversationGate } from './adapters/conversation-gate/index.js'
 import { buildConversationGate, buildTokenVerifier, missingJwtClaimChecks, parseEnv } from './main.js'
 
-const BASE_ENV = { DATABASE_URL: 'postgres://localhost/test', JWT_SECRET: 'a-test-secret' }
+const BASE_ENV = {
+  DATABASE_URL: 'postgres://localhost/test',
+  JWT_SECRET: 'a-test-secret',
+  CORS_ORIGIN: 'http://localhost:3000',
+}
 
 describe('parseEnv', () => {
   it('throws when DATABASE_URL is missing', () => {
@@ -14,6 +18,30 @@ describe('parseEnv', () => {
   it('throws when neither JWT_JWKS_URI nor JWT_SECRET is set', () => {
     expect(() => parseEnv({ DATABASE_URL: 'postgres://localhost/test' })).toThrow(
       'Set either JWT_JWKS_URI or JWT_SECRET',
+    )
+  })
+
+  it('throws when CORS_ORIGIN is missing', () => {
+    expect(() =>
+      parseEnv({ DATABASE_URL: 'postgres://localhost/test', JWT_SECRET: 'a-test-secret' }),
+    ).toThrow('CORS_ORIGIN')
+  })
+
+  it('parses a single CORS_ORIGIN', () => {
+    expect(parseEnv(BASE_ENV).corsOrigins).toEqual(['http://localhost:3000'])
+  })
+
+  it('splits and trims a comma-separated CORS_ORIGIN', () => {
+    const config = parseEnv({
+      ...BASE_ENV,
+      CORS_ORIGIN: ' https://www.goalslot.io , https://goalslot.io ',
+    })
+    expect(config.corsOrigins).toEqual(['https://www.goalslot.io', 'https://goalslot.io'])
+  })
+
+  it('throws when CORS_ORIGIN is set but blank', () => {
+    expect(() => parseEnv({ ...BASE_ENV, CORS_ORIGIN: '  ,  ' })).toThrow(
+      'CORS_ORIGIN is set but contains no valid origins',
     )
   })
 

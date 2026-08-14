@@ -1,3 +1,4 @@
+import cors from 'cors'
 import express, { type Express } from 'express'
 import { pinoHttp } from 'pino-http'
 
@@ -36,6 +37,19 @@ export interface HttpAppConfig {
    * in src/ports for what a host implements to change that.
    */
   conversationGate?: ConversationGate
+  /**
+   * Every real caller of this REST surface is a browser making a
+   * cross-origin request (this service and the web app it serves are on
+   * different origins), and Authorization is not a CORS-safelisted header,
+   * so every authenticated call is preceded by a preflight OPTIONS request.
+   * With no CORS middleware at all, that preflight either falls through to
+   * the auth middleware (which 401s it, since preflight never carries the
+   * bearer token) or succeeds with no Access-Control-* headers on the
+   * response - either way the browser blocks the real request before it is
+   * ever sent, and it looks exactly like a dead network connection from the
+   * client's side.
+   */
+  corsOrigins: string[]
   /** See createHealthRouter - backs GET /ready. */
   readinessCheck?: () => Promise<boolean>
   /**
@@ -76,6 +90,13 @@ export function createHttpApp(config: HttpAppConfig): Express {
 
   const app = express()
   app.set('trust proxy', config.trustProxy ?? 1)
+  // First, ahead of everything - including logging. cors() answers the
+  // preflight OPTIONS request itself (with the right Access-Control-*
+  // headers, no auth required) and stamps Access-Control-Allow-Origin on
+  // every other response. Mounted after auth, the preflight would 401
+  // before ever reaching here, since a preflight request never carries the
+  // bearer token - see corsOrigins above.
+  app.use(cors({ origin: config.corsOrigins }))
   // Without redact, pino-http's default request serializer copies every
   // request header - including Authorization - into every completed-request
   // log line at info level. That means every bearer token ever presented to
