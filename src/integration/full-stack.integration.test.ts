@@ -62,7 +62,13 @@ describe('full stack integration', () => {
     const messageBus = new InProcessMessageBus()
     const tokenVerifier = new FixedTokenVerifier()
 
-    const app = createHttpApp({ conversations, messages, tokenVerifier, messageBus })
+    const app = createHttpApp({
+      conversations,
+      messages,
+      tokenVerifier,
+      messageBus,
+      corsOrigins: ['http://localhost:3000'],
+    })
     server = createHttpServer(app)
     attachWebSocketServer({ server, tokenVerifier, conversations, messageBus })
 

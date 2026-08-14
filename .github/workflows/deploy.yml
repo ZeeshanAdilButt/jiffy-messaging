@@ -39,13 +39,14 @@ jobs:
           LOG_LEVEL: ${{ vars.LOG_LEVEL }}
           CONVERSATION_GATE_URL: ${{ secrets.CONVERSATION_GATE_URL }}
           CONVERSATION_GATE_SECRET: ${{ secrets.CONVERSATION_GATE_SECRET }}
+          CORS_ORIGIN: ${{ vars.CORS_ORIGIN }}
         run: |
           set -euo pipefail
 
-          names="DATABASE_URL JWT_SECRET JWT_ISSUER JWT_AUDIENCE JWT_USER_ID_CLAIM REDIS_URL LOG_LEVEL CONVERSATION_GATE_URL CONVERSATION_GATE_SECRET"
+          names="DATABASE_URL JWT_SECRET JWT_ISSUER JWT_AUDIENCE JWT_USER_ID_CLAIM REDIS_URL LOG_LEVEL CONVERSATION_GATE_URL CONVERSATION_GATE_SECRET CORS_ORIGIN"
 
           missing=""
-          for name in DATABASE_URL JWT_SECRET; do
+          for name in DATABASE_URL JWT_SECRET CORS_ORIGIN; do
             if [ -z "${!name}" ]; then
               missing="$missing $name"
             fi

@@ -39,13 +39,21 @@ describe('createServer', () => {
   })
 
   it('serves the HTTP layer', async () => {
-    server = createServer({ pool: fakePool(), tokenVerifier: new FixedTokenVerifier() })
+    server = createServer({
+      pool: fakePool(),
+      tokenVerifier: new FixedTokenVerifier(),
+      corsOrigins: ['http://localhost:3000'],
+    })
     const res = await request(server).get('/conversations')
     expect(res.status).toBe(401)
   })
 
   it('serves the WebSocket layer on the same port', async () => {
-    server = createServer({ pool: fakePool(), tokenVerifier: new FixedTokenVerifier() })
+    server = createServer({
+      pool: fakePool(),
+      tokenVerifier: new FixedTokenVerifier(),
+      corsOrigins: ['http://localhost:3000'],
+    })
     await new Promise<void>((resolve) => server.listen(0, resolve))
     const address = server.address()
     if (address === null || typeof address === 'string') {
@@ -71,13 +79,22 @@ describe('createServer', () => {
       },
     }
 
-    server = createServer({ pool: fakePool(), tokenVerifier: new FixedTokenVerifier(), messageBus: bus })
+    server = createServer({
+      pool: fakePool(),
+      tokenVerifier: new FixedTokenVerifier(),
+      messageBus: bus,
+      corsOrigins: ['http://localhost:3000'],
+    })
 
     expect(subscribedHandlerCount).toBe(1)
   })
 
   it('reports ready when the pool query succeeds', async () => {
-    server = createServer({ pool: fakePool(), tokenVerifier: new FixedTokenVerifier() })
+    server = createServer({
+      pool: fakePool(),
+      tokenVerifier: new FixedTokenVerifier(),
+      corsOrigins: ['http://localhost:3000'],
+    })
     const res = await request(server).get('/ready')
     expect(res.status).toBe(200)
   })
@@ -86,7 +103,11 @@ describe('createServer', () => {
     const failingPool = fakePool(async () => {
       throw new Error('connection refused')
     })
-    server = createServer({ pool: failingPool, tokenVerifier: new FixedTokenVerifier() })
+    server = createServer({
+      pool: failingPool,
+      tokenVerifier: new FixedTokenVerifier(),
+      corsOrigins: ['http://localhost:3000'],
+    })
     const res = await request(server).get('/ready')
     expect(res.status).toBe(503)
   })

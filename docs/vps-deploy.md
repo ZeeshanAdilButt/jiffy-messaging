@@ -149,8 +149,9 @@ in a log tells nobody anything. An unset variable is left out of the
 environment file entirely, which is what makes the service fall back to
 its documented default.
 
-| Variable            | Default when unset | Purpose                                                                             |
-| ------------------- | ------------------ | ----------------------------------------------------------------------------------- |
+| Variable            | Default when unset             | Purpose                                                                             |
+| ------------------- | ------------------------------- | ----------------------------------------------------------------------------------- |
+| `CORS_ORIGIN`       | required, service refuses to start | Comma-separated list of browser origins allowed to call the REST API (e.g. `https://www.goalslot.io`). Not a secret - the value is just as visible in any browser's network tab. Every real caller of `/conversations` and friends is a browser making a cross-origin request, and a preflight request carries no bearer token, so with this unset the auth middleware 401s every preflight and the browser blocks the real request before it is ever sent - the REST API is then unreachable from any browser, and it looks like a dead connection, not a 401 |
 | `JWT_ISSUER`        | not checked        | The `iss` claim the platform API signs. Set it, and set it to exactly what it signs |
 | `JWT_AUDIENCE`      | not checked        | The `aud` claim the platform API signs. Same                                        |
 | `JWT_USER_ID_CLAIM` | `sub`              | Only if the platform API puts its user id somewhere other than `sub`                |

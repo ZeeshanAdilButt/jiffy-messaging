@@ -27,6 +27,8 @@ export interface ParsedEnv {
   redisUrl?: string
   /** Unset means any two authenticated callers may talk - see readMessagingGate below. */
   conversationGate?: ConversationGateEnvConfig
+  /** Origins allowed to call the REST API from a browser - see readCorsOriginEnv below. */
+  corsOrigins: string[]
 }
 
 /**
@@ -55,27 +57,44 @@ export function parseEnv(env: NodeJS.ProcessEnv): ParsedEnv {
   // JWT_JWKS_URI wins if both are set, since a platform that has moved to
   // rotating keys behind a JWKS endpoint has no reason to also keep a
   // static secret configured.
+  let jwt: JwtEnvConfig
   if (env.JWT_JWKS_URI) {
-    return {
-      databaseUrl,
-      port,
-      redisUrl,
-      conversationGate,
-      jwt: { kind: 'jwks', uri: env.JWT_JWKS_URI, issuer, audience, userIdClaim },
-    }
+    jwt = { kind: 'jwks', uri: env.JWT_JWKS_URI, issuer, audience, userIdClaim }
+  } else if (env.JWT_SECRET) {
+    jwt = { kind: 'secret', secret: env.JWT_SECRET, issuer, audience, userIdClaim }
+  } else {
+    throw new Error('Set either JWT_JWKS_URI or JWT_SECRET')
   }
 
-  if (env.JWT_SECRET) {
-    return {
-      databaseUrl,
-      port,
-      redisUrl,
-      conversationGate,
-      jwt: { kind: 'secret', secret: env.JWT_SECRET, issuer, audience, userIdClaim },
-    }
-  }
+  const corsOrigins = readCorsOriginEnv(env)
 
-  throw new Error('Set either JWT_JWKS_URI or JWT_SECRET')
+  return { databaseUrl, port, redisUrl, conversationGate, corsOrigins, jwt }
+}
+
+/**
+ * Required, not optional: every real caller of the REST API (/conversations,
+ * /conversations/:id/messages, etc) is a browser, and a browser calling
+ * cross-origin with no CORS configuration at all gets every request silently
+ * blocked before it leaves the tab - no CORS headers ever appear on any
+ * response here, so the whole REST surface is unreachable and the failure
+ * looks like a dead network connection, not a 401 or a 500. Comma-separated
+ * to match dw-time-api's CORS_ORIGIN convention.
+ */
+function readCorsOriginEnv(env: NodeJS.ProcessEnv): string[] {
+  const raw = env.CORS_ORIGIN
+  if (!raw) {
+    throw new Error(
+      'Missing required environment variable: CORS_ORIGIN (comma-separated list of allowed browser origins, e.g. https://www.goalslot.io)',
+    )
+  }
+  const origins = raw
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+  if (origins.length === 0) {
+    throw new Error('CORS_ORIGIN is set but contains no valid origins')
+  }
+  return origins
 }
 
 /**
@@ -170,7 +189,7 @@ export function run(): void {
   const messageBus =
     redisClients.length > 0 ? new RedisMessageBus(redisClients[0]!, redisClients[1]!) : undefined
 
-  const server = createServer({ pool, tokenVerifier, messageBus, conversationGate })
+  const server = createServer({ pool, tokenVerifier, messageBus, conversationGate, corsOrigins: config.corsOrigins })
 
   server.listen(config.port, () => {
     const mode = messageBus ? 'multi-instance, via Redis' : 'single instance, in-process'

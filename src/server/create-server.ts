@@ -24,6 +24,8 @@ export interface CreateServerConfig {
    * platform instead.
    */
   conversationGate?: ConversationGate
+  /** Origins allowed to call the REST API from a browser - see createHttpApp. */
+  corsOrigins: string[]
 }
 
 /**
@@ -48,6 +50,7 @@ export function createServer(config: CreateServerConfig): Server {
     tokenVerifier: config.tokenVerifier,
     messageBus,
     conversationGate: config.conversationGate,
+    corsOrigins: config.corsOrigins,
     readinessCheck: async () => {
       await config.pool.query('SELECT 1')
       return true
