@@ -56,8 +56,8 @@ describe('PostgresConversationStore', () => {
         id: 'c1',
         createdAt,
         participants: [
-          { userId: 'a', lastReadAt: null },
-          { userId: 'b', lastReadAt: null },
+          { userId: 'a', lastReadAt: null, clearedAt: null },
+          { userId: 'b', lastReadAt: null, clearedAt: null },
         ],
       })
 
@@ -133,6 +133,29 @@ describe('PostgresConversationStore', () => {
       await store.markRead('c1', 'a', at)
 
       expect(pool.queries[0]!.params).toEqual([at, 'c1', 'a'])
+    })
+  })
+
+  describe('clear', () => {
+    it("updates only the caller's own participant row", async () => {
+      const at = new Date('2026-01-02T00:00:00Z')
+      const pool = new FakePool(new FakeClient([]))
+      const store = new PostgresConversationStore(pool as unknown as Pool)
+
+      await store.clear('c1', 'a', at)
+
+      expect(pool.queries[0]!.text).toContain('SET cleared_at = $1')
+      expect(pool.queries[0]!.text).toContain('conversation_id = $2 AND user_id = $3')
+      expect(pool.queries[0]!.params).toEqual([at, 'c1', 'a'])
+    })
+
+    it('never deletes anything', async () => {
+      const pool = new FakePool(new FakeClient([]))
+      const store = new PostgresConversationStore(pool as unknown as Pool)
+
+      await store.clear('c1', 'a', new Date())
+
+      expect(pool.queries[0]!.text).not.toContain('DELETE')
     })
   })
 })

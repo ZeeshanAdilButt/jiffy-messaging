@@ -25,7 +25,9 @@ This service owns its storage. Give it a database of its own rather than
 pointing it at the one the host platform already uses.
 
 [schema.sql](../src/adapters/postgres/schema.sql) creates three tables:
-`conversations`, `conversation_participants`, and `messages`. Every query
+`conversations`, `conversation_participants`, and `messages`. Changes to
+them since live in dated `.sql` files beside it, applied in filename order
+after it - see [Applying the schema](#applying-the-schema). Every query
 in the Postgres adapter names those tables unqualified, so they resolve
 through whatever `search_path` the connection has. Point the service at a
 shared database and those three names get claimed in that database's
@@ -62,15 +64,26 @@ land in `public` and the pin silently points at nothing.
 ### Applying the schema
 
 There is no migration framework and no migration step in the container.
-The schema is applied once, out of band, before the first start:
+The schema is applied out of band, before the first start, and again after
+any upgrade that adds to it:
+
+```
+DATABASE_URL="$DATABASE_URL" node scripts/apply-schema.mjs
+```
+
+That applies `src/adapters/postgres/schema.sql` and then every dated
+`.sql` file beside it, in filename order. To do it with psql instead, run
+them in that same order by hand:
 
 ```
 psql "$DATABASE_URL" -f src/adapters/postgres/schema.sql
+psql "$DATABASE_URL" -f src/adapters/postgres/2026-08-25-deletes.sql
 ```
 
-Every statement is `CREATE TABLE IF NOT EXISTS` or
-`CREATE INDEX IF NOT EXISTS`, so re-running it against an existing
-database is a no-op rather than an error.
+Every statement in all of them is `CREATE ... IF NOT EXISTS` or
+`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so re-running against an
+existing database is a no-op rather than an error. That is what makes this
+safe to run on every deploy, which is what the VPS deploy script does.
 
 `gen_random_uuid()` is built into Postgres 13 and later. On 12 or older
 you need `CREATE EXTENSION pgcrypto` first.

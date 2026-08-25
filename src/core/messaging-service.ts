@@ -1,4 +1,4 @@
-import { isParticipant, type Conversation, type Message } from '../domain/index.js'
+import { isParticipant, participantOf, type Conversation, type Message } from '../domain/index.js'
 import type {
   ConversationGate,
   ConversationStore,
@@ -11,7 +11,9 @@ import {
   ConversationNotAllowedError,
   ConversationNotFoundError,
   EmptyMessageError,
+  MessageNotFoundError,
   NotAParticipantError,
+  NotMessageAuthorError,
 } from './errors.js'
 
 export interface SendMessageInput {
@@ -77,12 +79,24 @@ export class MessagingService {
    */
   async listConversations(userId: string): Promise<Conversation[]> {
     const conversations = await this.conversations.findByParticipant(userId)
-    return Promise.all(
+    const withPreviews = await Promise.all(
       conversations.map(async (conversation) => {
-        const [lastMessage] = await this.messages.listByConversation(conversation.id, { limit: 1 })
-        return { ...conversation, lastMessage: lastMessage ?? null }
+        // `after` is what makes a deleted conversation stay deleted: the
+        // preview is drawn only from messages this user has not cleared,
+        // so a conversation whose whole history predates their clearedAt
+        // has no last message at all and drops out below.
+        const clearedAt = participantOf(conversation, userId)?.clearedAt ?? null
+        const [lastMessage] = await this.messages.listByConversation(conversation.id, {
+          limit: 1,
+          ...(clearedAt ? { after: clearedAt } : {}),
+        })
+        return { conversation, clearedAt, lastMessage: lastMessage ?? null }
       }),
     )
+
+    return withPreviews
+      .filter(({ clearedAt, lastMessage }) => clearedAt === null || lastMessage !== null)
+      .map(({ conversation, lastMessage }) => ({ ...conversation, lastMessage }))
   }
 
   async sendMessage(input: SendMessageInput): Promise<Message> {
@@ -125,8 +139,76 @@ export class MessagingService {
     requesterId: string,
     options?: ListMessagesOptions,
   ): Promise<Message[]> {
+    const conversation = await this.requireParticipant(conversationId, requesterId)
+
+    // The requester's own clearedAt wins over anything the caller asked
+    // for: `after` is not a client-supplied option on this method, it is
+    // how "I deleted this conversation" is enforced on every read of it.
+    const clearedAt = participantOf(conversation, requesterId)?.clearedAt ?? null
+    return this.messages.listByConversation(conversationId, {
+      ...options,
+      ...(clearedAt ? { after: clearedAt } : {}),
+    })
+  }
+
+  /**
+   * Deletes one message for everyone in the conversation.
+   *
+   * Only the sender may do this, which is the whole authorization rule:
+   * being able to read a message is not the same as being able to take it
+   * back, so a participant deleting someone else's message gets a 403 even
+   * though they can see it. The requester comes from the verified token at
+   * the HTTP layer, never from the request body.
+   *
+   * The result is a tombstone rather than a removed row - see
+   * Message.deletedAt. Repeating the call on an already-deleted message is
+   * a no-op that returns the same tombstone, so a double-tap or a retried
+   * request cannot move the deletion's timestamp.
+   */
+  async deleteMessage(conversationId: string, messageId: string, requesterId: string): Promise<Message> {
     await this.requireParticipant(conversationId, requesterId)
-    return this.messages.listByConversation(conversationId, options)
+
+    const message = await this.messages.findById(messageId)
+    // A message that belongs to a different conversation is reported as
+    // missing, not as forbidden: the requester is a participant of the
+    // conversation they named, and telling them a foreign id exists would
+    // answer a question they are not entitled to ask.
+    if (!message || message.conversationId !== conversationId) {
+      throw new MessageNotFoundError(messageId)
+    }
+
+    if (message.senderId !== requesterId) {
+      throw new NotMessageAuthorError(messageId, requesterId)
+    }
+
+    if (message.deletedAt !== null) {
+      return message
+    }
+
+    const deleted = await this.messages.softDelete(messageId, new Date())
+
+    // Same best-effort delivery as a send, and for the same reason: the
+    // deletion is already durable, so a bus failure must not surface as a
+    // failed delete. The notifier is deliberately not called - a deletion
+    // is not something to push a notification about.
+    void this.messageBus.publish(deleted).catch(() => {})
+
+    return deleted
+  }
+
+  /**
+   * Deletes a conversation for the requester alone. The other participants
+   * keep theirs, which is why this sets an instant on the requester's own
+   * participant row instead of touching the conversation. See
+   * ConversationParticipant.clearedAt.
+   *
+   * Idempotent in effect but not in timestamp: clearing twice moves the
+   * instant forward, which is correct - the second call means "and
+   * everything since as well".
+   */
+  async deleteConversation(conversationId: string, requesterId: string): Promise<void> {
+    await this.requireParticipant(conversationId, requesterId)
+    await this.conversations.clear(conversationId, requesterId, new Date())
   }
 
   async markRead(conversationId: string, userId: string, at: Date): Promise<void> {

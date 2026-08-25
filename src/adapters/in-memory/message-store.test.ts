@@ -58,4 +58,42 @@ describe('InMemoryMessageStore', () => {
     const messagesUpToCutoff = await store.listByConversation('c1', { before: cutoff })
     expect(messagesUpToCutoff.map((m) => m.body)).toEqual(['first'])
   })
+
+  describe('softDelete', () => {
+    it('keeps the row, empties the body, and stamps deletedAt', async () => {
+      const store = new InMemoryMessageStore()
+      const created = await store.create({ conversationId: 'c1', senderId: 'a', body: 'oops' })
+      const at = new Date('2026-01-02T00:00:00Z')
+
+      const deleted = await store.softDelete(created.id, at)
+
+      expect(deleted.body).toBe('')
+      expect(deleted.deletedAt).toEqual(at)
+      await expect(store.listByConversation('c1')).resolves.toHaveLength(1)
+    })
+
+    it('leaves an already-deleted message where it is', async () => {
+      const store = new InMemoryMessageStore()
+      const created = await store.create({ conversationId: 'c1', senderId: 'a', body: 'oops' })
+      const first = new Date('2026-01-02T00:00:00Z')
+      await store.softDelete(created.id, first)
+
+      const again = await store.softDelete(created.id, new Date('2026-01-03T00:00:00Z'))
+
+      expect(again.deletedAt).toEqual(first)
+    })
+  })
+
+  describe('after', () => {
+    it('returns only messages created strictly after the instant', async () => {
+      const store = new InMemoryMessageStore()
+      const older = await store.create({ conversationId: 'c1', senderId: 'a', body: 'old' })
+      vi.advanceTimersByTime(1000)
+      const newer = await store.create({ conversationId: 'c1', senderId: 'a', body: 'new' })
+
+      const results = await store.listByConversation('c1', { after: older.createdAt })
+
+      expect(results.map((message) => message.id)).toEqual([newer.id])
+    })
+  })
 })

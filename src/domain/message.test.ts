@@ -9,6 +9,7 @@ function makeMessage(createdAt: string): Message {
     senderId: 'a',
     body: 'hello',
     createdAt: new Date(createdAt),
+    deletedAt: null,
   }
 }
 

@@ -26,3 +26,22 @@ export class ConversationNotAllowedError extends Error {
     this.name = 'ConversationNotAllowedError'
   }
 }
+
+export class MessageNotFoundError extends Error {
+  constructor(messageId: string) {
+    super(`Message not found: ${messageId}`)
+    this.name = 'MessageNotFoundError'
+  }
+}
+
+/**
+ * Raised when someone tries to delete a message they did not send. Deleting
+ * for everyone is the sender's call and nobody else's, including the other
+ * participants in the conversation - see MessagingService.deleteMessage.
+ */
+export class NotMessageAuthorError extends Error {
+  constructor(messageId: string, userId: string) {
+    super(`User ${userId} did not send message ${messageId}`)
+    this.name = 'NotMessageAuthorError'
+  }
+}

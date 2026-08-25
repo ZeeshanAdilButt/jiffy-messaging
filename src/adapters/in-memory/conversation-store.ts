@@ -7,7 +7,7 @@ export class InMemoryConversationStore implements ConversationStore {
   async create(participantIds: string[]): Promise<Conversation> {
     const conversation: Conversation = {
       id: crypto.randomUUID(),
-      participants: participantIds.map((userId) => ({ userId, lastReadAt: null })),
+      participants: participantIds.map((userId) => ({ userId, lastReadAt: null, clearedAt: null })),
       createdAt: new Date(),
     }
     this.conversations.set(conversation.id, conversation)
@@ -30,5 +30,15 @@ export class InMemoryConversationStore implements ConversationStore {
     if (!participant) return
 
     participant.lastReadAt = at
+  }
+
+  async clear(conversationId: string, userId: string, at: Date): Promise<void> {
+    const conversation = this.conversations.get(conversationId)
+    if (!conversation) return
+
+    const participant = conversation.participants.find((p) => p.userId === userId)
+    if (!participant) return
+
+    participant.clearedAt = at
   }
 }

@@ -7,8 +7,10 @@ import {
   ConversationNotAllowedError,
   ConversationNotFoundError,
   EmptyMessageError,
+  MessageNotFoundError,
   MessagingService,
   NotAParticipantError,
+  NotMessageAuthorError,
 } from './index.js'
 
 class RecordingGate implements ConversationGate {
@@ -33,6 +35,26 @@ class RecordingNotifier implements MessageNotifier {
     this.calls.push({ message, recipientIds: [...recipientIds] })
   }
 }
+
+class RecordingBus implements MessageBus {
+  published: Message[] = []
+
+  async publish(message: Message): Promise<void> {
+    this.published.push(message)
+  }
+
+  onMessage(): () => void {
+    return () => {}
+  }
+}
+
+/**
+ * Both delete paths are timestamp-based and both are compared strictly, so
+ * two writes inside the same millisecond would make an assertion about
+ * "after the delete" depend on how fast the machine is. One tick is enough
+ * to keep the clock moving between them.
+ */
+const tick = () => new Promise((resolve) => setTimeout(resolve, 2))
 
 describe('MessagingService', () => {
   let service: MessagingService
@@ -329,6 +351,154 @@ describe('MessagingService', () => {
       ).rejects.toThrow(ConversationNotAllowedError)
 
       await expect(messages.listByConversation(conversation.id)).resolves.toEqual([])
+    })
+  })
+
+  describe('deleteMessage', () => {
+    it('tombstones the message rather than removing it', async () => {
+      const conversation = await service.createConversation('a', ['a', 'b'])
+      const sent = await service.sendMessage({ conversationId: conversation.id, senderId: 'a', body: 'oops' })
+
+      const deleted = await service.deleteMessage(conversation.id, sent.id, 'a')
+
+      expect(deleted.id).toBe(sent.id)
+      expect(deleted.deletedAt).toBeInstanceOf(Date)
+      expect(deleted.body).toBe('')
+    })
+
+    it('leaves the tombstone in the thread for both participants', async () => {
+      const conversation = await service.createConversation('a', ['a', 'b'])
+      const sent = await service.sendMessage({ conversationId: conversation.id, senderId: 'a', body: 'oops' })
+      await service.deleteMessage(conversation.id, sent.id, 'a')
+
+      for (const userId of ['a', 'b']) {
+        const messages = await service.listMessages(conversation.id, userId)
+        expect(messages).toHaveLength(1)
+        expect(messages[0]!.body).toBe('')
+        expect(messages[0]!.deletedAt).toBeInstanceOf(Date)
+      }
+    })
+
+    it('refuses to let a participant delete a message they did not send', async () => {
+      const conversation = await service.createConversation('a', ['a', 'b'])
+      const sent = await service.sendMessage({ conversationId: conversation.id, senderId: 'a', body: 'hi' })
+
+      await expect(service.deleteMessage(conversation.id, sent.id, 'b')).rejects.toThrow(NotMessageAuthorError)
+      const messages = await service.listMessages(conversation.id, 'b')
+      expect(messages[0]!.body).toBe('hi')
+    })
+
+    it('refuses a caller who is not in the conversation at all', async () => {
+      const conversation = await service.createConversation('a', ['a', 'b'])
+      const sent = await service.sendMessage({ conversationId: conversation.id, senderId: 'a', body: 'hi' })
+
+      await expect(service.deleteMessage(conversation.id, sent.id, 'c')).rejects.toThrow(NotAParticipantError)
+    })
+
+    it('reports a message from another conversation as missing', async () => {
+      const mine = await service.createConversation('a', ['a', 'b'])
+      const theirs = await service.createConversation('a', ['a', 'c'])
+      const elsewhere = await service.sendMessage({
+        conversationId: theirs.id,
+        senderId: 'a',
+        body: 'hi',
+      })
+
+      await expect(service.deleteMessage(mine.id, elsewhere.id, 'a')).rejects.toThrow(MessageNotFoundError)
+    })
+
+    it('is a no-op the second time, keeping the original deletion time', async () => {
+      const conversation = await service.createConversation('a', ['a', 'b'])
+      const sent = await service.sendMessage({ conversationId: conversation.id, senderId: 'a', body: 'hi' })
+
+      const first = await service.deleteMessage(conversation.id, sent.id, 'a')
+      await tick()
+      const second = await service.deleteMessage(conversation.id, sent.id, 'a')
+
+      expect(second.deletedAt).toEqual(first.deletedAt)
+    })
+
+    it('publishes the tombstone so open clients can redraw it, and notifies nobody', async () => {
+      const bus = new RecordingBus()
+      const notifier = new RecordingNotifier()
+      const withBus = new MessagingService(
+        new InMemoryConversationStore(),
+        new InMemoryMessageStore(),
+        bus,
+        undefined,
+        notifier,
+      )
+      const conversation = await withBus.createConversation('a', ['a', 'b'])
+      const sent = await withBus.sendMessage({ conversationId: conversation.id, senderId: 'a', body: 'hi' })
+
+      await withBus.deleteMessage(conversation.id, sent.id, 'a')
+
+      expect(bus.published).toHaveLength(2)
+      expect(bus.published[1]!.deletedAt).toBeInstanceOf(Date)
+      // One notification for the send, and none for the delete: a deletion
+      // is not something to push at anyone.
+      expect(notifier.calls).toHaveLength(1)
+    })
+  })
+
+  describe('deleteConversation', () => {
+    it('hides the conversation and its history from the caller only', async () => {
+      const conversation = await service.createConversation('a', ['a', 'b'])
+      await service.sendMessage({ conversationId: conversation.id, senderId: 'a', body: 'hi' })
+
+      await service.deleteConversation(conversation.id, 'a')
+
+      expect(await service.listConversations('a')).toEqual([])
+      await expect(service.listMessages(conversation.id, 'a')).resolves.toEqual([])
+
+      const forB = await service.listConversations('b')
+      expect(forB.map((c) => c.id)).toEqual([conversation.id])
+      await expect(service.listMessages(conversation.id, 'b')).resolves.toHaveLength(1)
+    })
+
+    it('brings the conversation back when the other side sends something new', async () => {
+      const conversation = await service.createConversation('a', ['a', 'b'])
+      await service.sendMessage({ conversationId: conversation.id, senderId: 'a', body: 'old' })
+      await service.deleteConversation(conversation.id, 'a')
+      await tick()
+
+      await service.sendMessage({ conversationId: conversation.id, senderId: 'b', body: 'new' })
+
+      const conversations = await service.listConversations('a')
+      expect(conversations.map((c) => c.id)).toEqual([conversation.id])
+      // Only what arrived after the delete: the cleared history stays gone.
+      const messages = await service.listMessages(conversation.id, 'a')
+      expect(messages.map((m) => m.body)).toEqual(['new'])
+    })
+
+    it('previews the conversation from what is left, not from the cleared history', async () => {
+      const conversation = await service.createConversation('a', ['a', 'b'])
+      await service.sendMessage({ conversationId: conversation.id, senderId: 'b', body: 'old' })
+      await service.deleteConversation(conversation.id, 'a')
+      await tick()
+      await service.sendMessage({ conversationId: conversation.id, senderId: 'b', body: 'new' })
+
+      const [forA] = await service.listConversations('a')
+      expect(forA!.lastMessage?.body).toBe('new')
+    })
+
+    it('hides a conversation that never had any messages', async () => {
+      const conversation = await service.createConversation('a', ['a', 'b'])
+
+      await service.deleteConversation(conversation.id, 'a')
+
+      expect(await service.listConversations('a')).toEqual([])
+      expect((await service.listConversations('b')).map((c) => c.id)).toEqual([conversation.id])
+    })
+
+    it('refuses a caller who is not a participant', async () => {
+      const conversation = await service.createConversation('a', ['a', 'b'])
+
+      await expect(service.deleteConversation(conversation.id, 'c')).rejects.toThrow(NotAParticipantError)
+    })
+
+    it('rejects an unknown conversation', async () => {
+      await expect(service.deleteConversation('nope', 'a')).rejects.toThrow(ConversationNotFoundError)
     })
   })
 })

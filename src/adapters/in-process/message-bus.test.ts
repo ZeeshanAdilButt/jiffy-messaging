@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { InProcessMessageBus } from './message-bus.js'
 
 function makeMessage(id: string) {
-  return { id, conversationId: 'c1', senderId: 'a', body: 'hi', createdAt: new Date() }
+  return { id, conversationId: 'c1', senderId: 'a', body: 'hi', createdAt: new Date(), deletedAt: null }
 }
 
 describe('InProcessMessageBus', () => {

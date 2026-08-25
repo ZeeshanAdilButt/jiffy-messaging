@@ -1,6 +1,11 @@
--- Applied once at container or dev startup. No migration framework: this is
--- the whole schema, and future changes to it get their own dated file here
--- once there is a second one to order against.
+-- Applied at container or dev startup, before anything else in this
+-- directory. No migration framework: this is the base schema, and every
+-- change to it since gets its own dated file beside this one, applied in
+-- filename order after this runs. See scripts/apply-schema.mjs.
+--
+-- Nothing is ever edited out of this file. A column added later belongs in
+-- its own dated file as an idempotent ALTER, so a database created before
+-- that change and one created after it end up identical.
 
 CREATE TABLE IF NOT EXISTS conversations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
