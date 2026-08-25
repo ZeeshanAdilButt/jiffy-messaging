@@ -84,8 +84,12 @@ persisted that depends on it.
 ## 3. Apply the schema
 
 ```
-psql "$DATABASE_URL" -f src/adapters/postgres/schema.sql
+DATABASE_URL="$DATABASE_URL" node scripts/apply-schema.mjs
 ```
+
+That applies `src/adapters/postgres/schema.sql` and then every dated
+`.sql` file beside it, in order. Doing it with psql instead means running
+each of those files yourself, in that same order.
 
 If you took the separate-schema route instead of a separate database, set
 `search_path` for this connection too, or the tables land in `public` and

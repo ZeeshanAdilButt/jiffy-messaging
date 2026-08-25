@@ -107,6 +107,7 @@ describe('attachWebSocketServer', () => {
       senderId: 'user_b',
       body: 'hello',
       createdAt: new Date(),
+      deletedAt: null,
     })
 
     const [data] = await messagePromise
@@ -128,6 +129,7 @@ describe('attachWebSocketServer', () => {
       senderId: 'user_a',
       body: 'private to user_a',
       createdAt: new Date(),
+      deletedAt: null,
     })
 
     // No event to await for "nothing arrived" - give delivery a moment to

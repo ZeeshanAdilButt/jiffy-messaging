@@ -1,6 +1,6 @@
 import { once } from 'node:events'
 import { createServer as createHttpServer, type Server } from 'node:http'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Pool } from 'pg'
@@ -39,7 +39,19 @@ class FixedTokenVerifier implements TokenVerifier {
 }
 
 const currentDir = dirname(fileURLToPath(import.meta.url))
-const schemaSql = readFileSync(join(currentDir, '../adapters/postgres/schema.sql'), 'utf8')
+const schemaDir = join(currentDir, '../adapters/postgres')
+
+// schema.sql first, then every dated file beside it in filename order.
+// Same rule as scripts/apply-schema.mjs, deliberately duplicated rather
+// than shared: that script is what production runs and it stays a
+// dependency-free standalone file. Reading only schema.sql here would run
+// this suite against a database missing every column added since.
+const schemaFiles = [
+  'schema.sql',
+  ...readdirSync(schemaDir)
+    .filter((name) => name.endsWith('.sql') && name !== 'schema.sql')
+    .sort(),
+]
 
 describe('full stack integration', () => {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL })
@@ -47,7 +59,9 @@ describe('full stack integration', () => {
   let port: number
 
   beforeAll(async () => {
-    await pool.query(schemaSql)
+    for (const file of schemaFiles) {
+      await pool.query(readFileSync(join(schemaDir, file), 'utf8'))
+    }
   })
 
   afterAll(async () => {
@@ -176,5 +190,120 @@ describe('full stack integration', () => {
       .send({ body: 'should be rejected' })
 
     expect(res.status).toBe(403)
+  })
+
+  it('deletes a message for everyone, leaving a tombstone row in real Postgres', async () => {
+    const createRes = await request(server)
+      .post('/conversations')
+      .set('Authorization', 'Bearer user_a')
+      .send({ participantIds: ['user_a', 'user_b'] })
+    const conversationId = createRes.body.id as string
+
+    const sendRes = await request(server)
+      .post(`/conversations/${conversationId}/messages`)
+      .set('Authorization', 'Bearer user_a')
+      .send({ body: 'sent to the wrong person' })
+    const messageId = sendRes.body.id as string
+
+    const deleteRes = await request(server)
+      .delete(`/conversations/${conversationId}/messages/${messageId}`)
+      .set('Authorization', 'Bearer user_a')
+    expect(deleteRes.status).toBe(200)
+
+    // The row is still there and the text is not: that is the whole point
+    // of a tombstone over a DELETE.
+    const row = await pool.query('SELECT body, deleted_at FROM messages WHERE id = $1', [messageId])
+    expect(row.rowCount).toBe(1)
+    expect(row.rows[0].body).toBe('')
+    expect(row.rows[0].deleted_at).not.toBeNull()
+
+    const listRes = await request(server)
+      .get(`/conversations/${conversationId}/messages`)
+      .set('Authorization', 'Bearer user_b')
+    expect(listRes.body).toHaveLength(1)
+    expect(listRes.body[0].deletedAt).not.toBeNull()
+  })
+
+  it('refuses to delete a message the caller did not send', async () => {
+    const createRes = await request(server)
+      .post('/conversations')
+      .set('Authorization', 'Bearer user_a')
+      .send({ participantIds: ['user_a', 'user_b'] })
+    const conversationId = createRes.body.id as string
+
+    const sendRes = await request(server)
+      .post(`/conversations/${conversationId}/messages`)
+      .set('Authorization', 'Bearer user_a')
+      .send({ body: 'mine' })
+
+    const res = await request(server)
+      .delete(`/conversations/${conversationId}/messages/${sendRes.body.id}`)
+      .set('Authorization', 'Bearer user_b')
+
+    expect(res.status).toBe(403)
+    const row = await pool.query('SELECT body FROM messages WHERE id = $1', [sendRes.body.id])
+    expect(row.rows[0].body).toBe('mine')
+  })
+
+  it('deletes a conversation for one participant and leaves the other untouched', async () => {
+    const createRes = await request(server)
+      .post('/conversations')
+      .set('Authorization', 'Bearer user_a')
+      .send({ participantIds: ['user_a', 'user_b'] })
+    const conversationId = createRes.body.id as string
+
+    await request(server)
+      .post(`/conversations/${conversationId}/messages`)
+      .set('Authorization', 'Bearer user_a')
+      .send({ body: 'history' })
+
+    const deleteRes = await request(server)
+      .delete(`/conversations/${conversationId}`)
+      .set('Authorization', 'Bearer user_a')
+    expect(deleteRes.status).toBe(204)
+
+    const forA = await request(server).get('/conversations').set('Authorization', 'Bearer user_a')
+    expect(forA.body).toHaveLength(0)
+
+    const forB = await request(server).get('/conversations').set('Authorization', 'Bearer user_b')
+    expect(forB.body).toHaveLength(1)
+    const messagesForB = await request(server)
+      .get(`/conversations/${conversationId}/messages`)
+      .set('Authorization', 'Bearer user_b')
+    expect(messagesForB.body.map((m: { body: string }) => m.body)).toEqual(['history'])
+
+    // Nothing was removed, which is what makes the other side's copy safe.
+    const rows = await pool.query('SELECT count(*)::int AS count FROM messages WHERE conversation_id = $1', [
+      conversationId,
+    ])
+    expect(rows.rows[0].count).toBe(1)
+  })
+
+  it('brings a deleted conversation back with only the messages sent since', async () => {
+    const createRes = await request(server)
+      .post('/conversations')
+      .set('Authorization', 'Bearer user_a')
+      .send({ participantIds: ['user_a', 'user_b'] })
+    const conversationId = createRes.body.id as string
+
+    await request(server)
+      .post(`/conversations/${conversationId}/messages`)
+      .set('Authorization', 'Bearer user_b')
+      .send({ body: 'before the delete' })
+
+    await request(server).delete(`/conversations/${conversationId}`).set('Authorization', 'Bearer user_a')
+
+    await request(server)
+      .post(`/conversations/${conversationId}/messages`)
+      .set('Authorization', 'Bearer user_b')
+      .send({ body: 'after the delete' })
+
+    const forA = await request(server).get('/conversations').set('Authorization', 'Bearer user_a')
+    expect(forA.body).toHaveLength(1)
+
+    const messages = await request(server)
+      .get(`/conversations/${conversationId}/messages`)
+      .set('Authorization', 'Bearer user_a')
+    expect(messages.body.map((m: { body: string }) => m.body)).toEqual(['after the delete'])
   })
 })

@@ -82,11 +82,17 @@ The script, on the host, in `C:\app\jiffy-messaging`:
    `.env.incoming` to `.env`.
 3. `pnpm install --frozen-lockfile`.
 4. Applies [src/adapters/postgres/schema.sql](../src/adapters/postgres/schema.sql)
-   through [scripts/apply-schema.mjs](../scripts/apply-schema.mjs). Every
-   statement in it is `CREATE ... IF NOT EXISTS`, so this creates the three
-   tables on the first deploy and does nothing on every one after. It runs
-   before the build so an unreachable database fails the deploy without the
-   running service having been touched.
+   and every dated `.sql` file beside it, in filename order, through
+   [scripts/apply-schema.mjs](../scripts/apply-schema.mjs). Every statement
+   in all of them is `CREATE ... IF NOT EXISTS` or `ALTER TABLE ... ADD
+   COLUMN IF NOT EXISTS`, so this builds the schema on the first deploy and
+   does nothing on every one after that adds nothing new. A release that
+   does add a column therefore needs no separate migration step: it ships
+   the dated file and this applies it. The script then checks the tables
+   and the columns the service depends on are actually reachable, so a file
+   that never ran fails the deploy here rather than at the first request.
+   It runs before the build so an unreachable database fails the deploy
+   without the running service having been touched.
 5. `pnpm build`, then confirms `dist/main.js` exists.
 6. Stops the service, waits for the port to go quiet, and starts it. The
    wait matters: without it a readiness probe can pass against the old

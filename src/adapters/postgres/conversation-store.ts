@@ -5,7 +5,7 @@ import type { ConversationStore } from '../../ports/index.js'
 import { firstRow, rowsToConversations, type ConversationParticipantRow } from './rows.js'
 
 const SELECT_WITH_PARTICIPANTS = `
-  SELECT c.id, c.created_at, p.user_id, p.last_read_at
+  SELECT c.id, c.created_at, p.user_id, p.last_read_at, p.cleared_at
   FROM conversations c
   JOIN conversation_participants p ON p.conversation_id = c.id
 `
@@ -42,7 +42,7 @@ export class PostgresConversationStore implements ConversationStore {
       return {
         id,
         createdAt,
-        participants: participantIds.map((userId) => ({ userId, lastReadAt: null })),
+        participants: participantIds.map((userId) => ({ userId, lastReadAt: null, clearedAt: null })),
       }
     } catch (error) {
       await client.query('ROLLBACK')
@@ -72,6 +72,13 @@ export class PostgresConversationStore implements ConversationStore {
   async markRead(conversationId: string, userId: string, at: Date): Promise<void> {
     await this.pool.query(
       'UPDATE conversation_participants SET last_read_at = $1 WHERE conversation_id = $2 AND user_id = $3',
+      [at, conversationId, userId],
+    )
+  }
+
+  async clear(conversationId: string, userId: string, at: Date): Promise<void> {
+    await this.pool.query(
+      'UPDATE conversation_participants SET cleared_at = $1 WHERE conversation_id = $2 AND user_id = $3',
       [at, conversationId, userId],
     )
   }

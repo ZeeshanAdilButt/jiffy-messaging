@@ -6,7 +6,7 @@ function makeConversation(userIds: string[]): Conversation {
   return {
     id: 'c1',
     createdAt: new Date('2026-01-01T00:00:00Z'),
-    participants: userIds.map((userId) => ({ userId, lastReadAt: null })),
+    participants: userIds.map((userId) => ({ userId, lastReadAt: null, clearedAt: null })),
   }
 }
 

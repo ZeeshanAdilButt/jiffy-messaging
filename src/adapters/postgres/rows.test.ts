@@ -11,6 +11,7 @@ describe('rowToMessage', () => {
       sender_id: 'a',
       body: 'hi',
       created_at: createdAt,
+      deleted_at: null,
     })
 
     expect(message).toEqual({
@@ -19,6 +20,7 @@ describe('rowToMessage', () => {
       senderId: 'a',
       body: 'hi',
       createdAt,
+      deletedAt: null,
     })
   })
 })
@@ -27,8 +29,8 @@ describe('rowsToConversations', () => {
   it('groups one row per participant into a single conversation', () => {
     const createdAt = new Date('2026-01-01T00:00:00Z')
     const conversations = rowsToConversations([
-      { id: 'c1', created_at: createdAt, user_id: 'a', last_read_at: null },
-      { id: 'c1', created_at: createdAt, user_id: 'b', last_read_at: null },
+      { id: 'c1', created_at: createdAt, user_id: 'a', last_read_at: null, cleared_at: null },
+      { id: 'c1', created_at: createdAt, user_id: 'b', last_read_at: null, cleared_at: null },
     ])
 
     expect(conversations).toEqual([
@@ -36,8 +38,8 @@ describe('rowsToConversations', () => {
         id: 'c1',
         createdAt,
         participants: [
-          { userId: 'a', lastReadAt: null },
-          { userId: 'b', lastReadAt: null },
+          { userId: 'a', lastReadAt: null, clearedAt: null },
+          { userId: 'b', lastReadAt: null, clearedAt: null },
         ],
       },
     ])
@@ -46,9 +48,9 @@ describe('rowsToConversations', () => {
   it('keeps separate conversations separate, in first-seen order', () => {
     const createdAt = new Date('2026-01-01T00:00:00Z')
     const conversations = rowsToConversations([
-      { id: 'c2', created_at: createdAt, user_id: 'b', last_read_at: null },
-      { id: 'c1', created_at: createdAt, user_id: 'a', last_read_at: null },
-      { id: 'c2', created_at: createdAt, user_id: 'c', last_read_at: null },
+      { id: 'c2', created_at: createdAt, user_id: 'b', last_read_at: null, cleared_at: null },
+      { id: 'c1', created_at: createdAt, user_id: 'a', last_read_at: null, cleared_at: null },
+      { id: 'c2', created_at: createdAt, user_id: 'c', last_read_at: null, cleared_at: null },
     ])
 
     expect(conversations.map((c) => c.id)).toEqual(['c2', 'c1'])
@@ -62,7 +64,9 @@ describe('rowsToConversations', () => {
   it('preserves a non-null lastReadAt', () => {
     const createdAt = new Date('2026-01-01T00:00:00Z')
     const lastReadAt = new Date('2026-01-02T00:00:00Z')
-    const conversations = rowsToConversations([{ id: 'c1', created_at: createdAt, user_id: 'a', last_read_at: lastReadAt }])
+    const conversations = rowsToConversations([
+      { id: 'c1', created_at: createdAt, user_id: 'a', last_read_at: lastReadAt, cleared_at: null },
+    ])
 
     expect(conversations[0]!.participants[0]!.lastReadAt).toEqual(lastReadAt)
   })

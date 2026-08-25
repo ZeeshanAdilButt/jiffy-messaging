@@ -31,7 +31,12 @@ class FixedTokenVerifier implements TokenVerifier {
   }
 }
 
-function authed(app: Express, method: 'get' | 'post', path: string, userId: KnownUser) {
+function authed(
+  app: Express,
+  method: 'get' | 'post' | 'delete',
+  path: string,
+  userId: KnownUser,
+) {
   return request(app)[method](path).set('Authorization', `Bearer ${userId}`)
 }
 
@@ -290,6 +295,127 @@ describe('HTTP app', () => {
         (p: { userId: string }) => p.userId === 'user_a',
       )
       expect(participant.lastReadAt).not.toBeNull()
+    })
+  })
+
+  describe('deletes', () => {
+    async function createConversation() {
+      const res = await authed(app, 'post', '/conversations', 'user_a').send({
+        participantIds: ['user_a', 'user_b'],
+      })
+      return res.body.id as string
+    }
+
+    async function sendMessage(conversationId: string, sender: KnownUser, body: string) {
+      const res = await authed(app, 'post', `/conversations/${conversationId}/messages`, sender).send({
+        body,
+      })
+      return res.body.id as string
+    }
+
+    it('lets the sender delete their own message and returns the tombstone', async () => {
+      const conversationId = await createConversation()
+      const messageId = await sendMessage(conversationId, 'user_a', 'oops')
+
+      const res = await authed(
+        app,
+        'delete',
+        `/conversations/${conversationId}/messages/${messageId}`,
+        'user_a',
+      )
+
+      expect(res.status).toBe(200)
+      expect(res.body.id).toBe(messageId)
+      expect(res.body.body).toBe('')
+      expect(res.body.deletedAt).not.toBeNull()
+    })
+
+    it('shows the other participant a tombstone rather than removing the message', async () => {
+      const conversationId = await createConversation()
+      const messageId = await sendMessage(conversationId, 'user_a', 'oops')
+      await authed(app, 'delete', `/conversations/${conversationId}/messages/${messageId}`, 'user_a')
+
+      const res = await authed(app, 'get', `/conversations/${conversationId}/messages`, 'user_b')
+
+      expect(res.body).toHaveLength(1)
+      expect(res.body[0].body).toBe('')
+      expect(res.body[0].deletedAt).not.toBeNull()
+    })
+
+    it("refuses to delete another participant's message, and leaves it standing", async () => {
+      const conversationId = await createConversation()
+      const messageId = await sendMessage(conversationId, 'user_a', 'hello')
+
+      const res = await authed(
+        app,
+        'delete',
+        `/conversations/${conversationId}/messages/${messageId}`,
+        'user_b',
+      )
+      expect(res.status).toBe(403)
+
+      const listRes = await authed(app, 'get', `/conversations/${conversationId}/messages`, 'user_b')
+      expect(listRes.body[0].body).toBe('hello')
+    })
+
+    it('rejects a message delete from someone outside the conversation', async () => {
+      const conversationId = await createConversation()
+      const messageId = await sendMessage(conversationId, 'user_a', 'hello')
+
+      const res = await authed(
+        app,
+        'delete',
+        `/conversations/${conversationId}/messages/${messageId}`,
+        'user_c',
+      )
+      expect(res.status).toBe(403)
+    })
+
+    it('404s an unknown message id', async () => {
+      const conversationId = await createConversation()
+
+      const res = await authed(
+        app,
+        'delete',
+        `/conversations/${conversationId}/messages/missing`,
+        'user_a',
+      )
+      expect(res.status).toBe(404)
+    })
+
+    it('deletes a conversation for the caller only', async () => {
+      const conversationId = await createConversation()
+      await sendMessage(conversationId, 'user_a', 'hello')
+
+      const res = await authed(app, 'delete', `/conversations/${conversationId}`, 'user_a')
+      expect(res.status).toBe(204)
+
+      const forA = await authed(app, 'get', '/conversations', 'user_a')
+      expect(forA.body).toHaveLength(0)
+
+      const forB = await authed(app, 'get', '/conversations', 'user_b')
+      expect(forB.body).toHaveLength(1)
+      const messagesForB = await authed(app, 'get', `/conversations/${conversationId}/messages`, 'user_b')
+      expect(messagesForB.body).toHaveLength(1)
+    })
+
+    it('rejects a conversation delete from someone who is not a participant', async () => {
+      const conversationId = await createConversation()
+
+      const res = await authed(app, 'delete', `/conversations/${conversationId}`, 'user_c')
+      expect(res.status).toBe(403)
+    })
+
+    it('never tells the other participant that someone cleared the conversation', async () => {
+      const conversationId = await createConversation()
+      await authed(app, 'delete', `/conversations/${conversationId}`, 'user_a')
+
+      const res = await authed(app, 'get', `/conversations/${conversationId}`, 'user_b')
+
+      expect(res.status).toBe(200)
+      for (const participant of res.body.participants as Array<Record<string, unknown>>) {
+        expect(participant).not.toHaveProperty('clearedAt')
+      }
     })
   })
 

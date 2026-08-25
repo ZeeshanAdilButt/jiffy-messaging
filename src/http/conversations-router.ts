@@ -1,5 +1,6 @@
 import { Router, type NextFunction, type Request, type Response } from 'express'
 
+import type { Conversation } from '../domain/index.js'
 import type { MessagingService } from '../core/index.js'
 import { messagesPublishedTotal } from '../observability/metrics.js'
 
@@ -18,6 +19,21 @@ function userId(res: Response): string {
  * implementation to enforce it itself.
  */
 const MAX_PARTICIPANTS = 50
+
+/**
+ * Strips `clearedAt` from every participant before a conversation goes out
+ * over the wire. It is server-side state about whether someone deleted
+ * their own copy of the thread, and no client has any use for it - least
+ * of all the other participant, to whom it would read as "they deleted
+ * this chat on <date>". Nothing else about a participant is hidden, so
+ * this is a projection rather than a general-purpose serializer.
+ */
+function toConversationResponse(conversation: Conversation) {
+  return {
+    ...conversation,
+    participants: conversation.participants.map(({ userId, lastReadAt }) => ({ userId, lastReadAt })),
+  }
+}
 
 export function createConversationsRouter(messaging: MessagingService): Router {
   const router = Router()
@@ -39,7 +55,7 @@ export function createConversationsRouter(messaging: MessagingService): Router {
       }
 
       const conversation = await messaging.createConversation(userId(res), participantIds)
-      res.status(201).json(conversation)
+      res.status(201).json(toConversationResponse(conversation))
     } catch (error) {
       next(error)
     }
@@ -48,7 +64,7 @@ export function createConversationsRouter(messaging: MessagingService): Router {
   router.get('/conversations', async (_req: Request, res: Response, next: NextFunction) => {
     try {
       const conversations = await messaging.listConversations(userId(res))
-      res.status(200).json(conversations)
+      res.status(200).json(conversations.map(toConversationResponse))
     } catch (error) {
       next(error)
     }
@@ -57,7 +73,7 @@ export function createConversationsRouter(messaging: MessagingService): Router {
   router.get('/conversations/:id', async (req: Request, res: Response, next: NextFunction) => {
     try {
       const conversation = await messaging.getConversation(req.params.id as string, userId(res))
-      res.status(200).json(conversation)
+      res.status(200).json(toConversationResponse(conversation))
     } catch (error) {
       next(error)
     }
@@ -127,6 +143,38 @@ export function createConversationsRouter(messaging: MessagingService): Router {
       }
     },
   )
+
+  // Deletes for everyone, and only the sender may ask. Who is asking comes
+  // from res.locals.userId, set by the auth middleware from the verified
+  // token - there is no user id anywhere in this request for a client to
+  // supply. The tombstone comes back in the response so the caller can
+  // redraw the message in place rather than refetch the thread.
+  router.delete(
+    '/conversations/:id/messages/:messageId',
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const message = await messaging.deleteMessage(
+          req.params.id as string,
+          req.params.messageId as string,
+          userId(res),
+        )
+        res.status(200).json(message)
+      } catch (error) {
+        next(error)
+      }
+    },
+  )
+
+  // Deletes for the caller only. Every other participant keeps the
+  // conversation and its history exactly as it was.
+  router.delete('/conversations/:id', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await messaging.deleteConversation(req.params.id as string, userId(res))
+      res.status(204).send()
+    } catch (error) {
+      next(error)
+    }
+  })
 
   return router
 }

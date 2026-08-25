@@ -8,8 +8,8 @@ describe('InMemoryConversationStore', () => {
     const conversation = await store.create(['a', 'b'])
 
     expect(conversation.participants).toEqual([
-      { userId: 'a', lastReadAt: null },
-      { userId: 'b', lastReadAt: null },
+      { userId: 'a', lastReadAt: null, clearedAt: null },
+      { userId: 'b', lastReadAt: null, clearedAt: null },
     ])
   })
 
@@ -52,5 +52,36 @@ describe('InMemoryConversationStore', () => {
 
     await expect(store.markRead('missing', 'a', new Date())).resolves.toBeUndefined()
     await expect(store.markRead(conversation.id, 'z', new Date())).resolves.toBeUndefined()
+  })
+
+  describe('clear', () => {
+    it("sets clearedAt on the given participant and nobody else", async () => {
+      const store = new InMemoryConversationStore()
+      const conversation = await store.create(['a', 'b'])
+      const at = new Date('2026-01-02T00:00:00Z')
+
+      await store.clear(conversation.id, 'a', at)
+
+      const found = await store.findById(conversation.id)
+      expect(found!.participants.find((p) => p.userId === 'a')!.clearedAt).toEqual(at)
+      expect(found!.participants.find((p) => p.userId === 'b')!.clearedAt).toBeNull()
+    })
+
+    it('keeps the conversation itself', async () => {
+      const store = new InMemoryConversationStore()
+      const conversation = await store.create(['a', 'b'])
+
+      await store.clear(conversation.id, 'a', new Date())
+
+      await expect(store.findById(conversation.id)).resolves.not.toBeNull()
+    })
+
+    it('does nothing for an unknown conversation or a non-participant', async () => {
+      const store = new InMemoryConversationStore()
+      const conversation = await store.create(['a', 'b'])
+
+      await expect(store.clear('missing', 'a', new Date())).resolves.toBeUndefined()
+      await expect(store.clear(conversation.id, 'c', new Date())).resolves.toBeUndefined()
+    })
   })
 })

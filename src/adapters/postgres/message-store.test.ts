@@ -30,6 +30,109 @@ describe('PostgresMessageStore', () => {
     })
   })
 
+  describe('findById', () => {
+    it('returns null when nothing matches', async () => {
+      const pool = new FakePool([{ rows: [] }])
+      const store = new PostgresMessageStore(pool as unknown as Pool)
+
+      await expect(store.findById('m1')).resolves.toBeNull()
+      expect(pool.queries[0]!.params).toEqual(['m1'])
+    })
+
+    it('maps the row, deleted_at included', async () => {
+      const createdAt = new Date('2026-01-01T00:00:00Z')
+      const deletedAt = new Date('2026-01-02T00:00:00Z')
+      const pool = new FakePool([
+        {
+          rows: [
+            {
+              id: 'm1',
+              conversation_id: 'c1',
+              sender_id: 'a',
+              body: '',
+              created_at: createdAt,
+              deleted_at: deletedAt,
+            },
+          ],
+        },
+      ])
+      const store = new PostgresMessageStore(pool as unknown as Pool)
+
+      await expect(store.findById('m1')).resolves.toEqual({
+        id: 'm1',
+        conversationId: 'c1',
+        senderId: 'a',
+        body: '',
+        createdAt,
+        deletedAt,
+      })
+    })
+  })
+
+  describe('softDelete', () => {
+    it('empties the body in the same statement that sets deleted_at', async () => {
+      const at = new Date('2026-01-02T00:00:00Z')
+      const pool = new FakePool([
+        {
+          rows: [
+            {
+              id: 'm1',
+              conversation_id: 'c1',
+              sender_id: 'a',
+              body: '',
+              created_at: new Date('2026-01-01T00:00:00Z'),
+              deleted_at: at,
+            },
+          ],
+        },
+      ])
+      const store = new PostgresMessageStore(pool as unknown as Pool)
+
+      const message = await store.softDelete('m1', at)
+
+      expect(message.body).toBe('')
+      expect(message.deletedAt).toEqual(at)
+      expect(pool.queries[0]!.text).toContain("SET body = ''")
+      expect(pool.queries[0]!.text).toContain('deleted_at IS NULL')
+      expect(pool.queries[0]!.params).toEqual(['m1', at])
+    })
+
+    it('never removes the row', async () => {
+      const pool = new FakePool([{ rows: [{ id: 'm1', conversation_id: 'c1', sender_id: 'a', body: '', created_at: new Date(), deleted_at: new Date() }] }])
+      const store = new PostgresMessageStore(pool as unknown as Pool)
+
+      await store.softDelete('m1', new Date())
+
+      expect(pool.queries[0]!.text).not.toContain('DELETE')
+    })
+
+    it('falls back to the existing tombstone when the update matched nothing', async () => {
+      const deletedAt = new Date('2026-01-02T00:00:00Z')
+      const pool = new FakePool([
+        // The UPDATE ... WHERE deleted_at IS NULL matched no row, which is
+        // what a second delete of the same message looks like.
+        { rows: [] },
+        {
+          rows: [
+            {
+              id: 'm1',
+              conversation_id: 'c1',
+              sender_id: 'a',
+              body: '',
+              created_at: new Date('2026-01-01T00:00:00Z'),
+              deleted_at: deletedAt,
+            },
+          ],
+        },
+      ])
+      const store = new PostgresMessageStore(pool as unknown as Pool)
+
+      const message = await store.softDelete('m1', new Date('2026-01-03T00:00:00Z'))
+
+      expect(message.deletedAt).toEqual(deletedAt)
+    })
+  })
+
   describe('listByConversation', () => {
     it('applies a default limit when no options are given', async () => {
       const pool = new FakePool([{ rows: [] }])
@@ -50,6 +153,30 @@ describe('PostgresMessageStore', () => {
 
       expect(pool.queries[0]!.params).toEqual(['c1', before, 5])
       expect(pool.queries[0]!.text).toContain('LIMIT $3')
+    })
+
+    it('adds after as its own positional parameter', async () => {
+      const pool = new FakePool([{ rows: [] }])
+      const store = new PostgresMessageStore(pool as unknown as Pool)
+      const after = new Date('2026-01-01T00:00:00Z')
+
+      await store.listByConversation('c1', { after })
+
+      expect(pool.queries[0]!.params).toEqual(['c1', after, 50])
+      expect(pool.queries[0]!.text).toContain('created_at > $2')
+    })
+
+    it('applies before and after together', async () => {
+      const pool = new FakePool([{ rows: [] }])
+      const store = new PostgresMessageStore(pool as unknown as Pool)
+      const before = new Date('2026-02-01T00:00:00Z')
+      const after = new Date('2026-01-01T00:00:00Z')
+
+      await store.listByConversation('c1', { before, after, limit: 5 })
+
+      expect(pool.queries[0]!.params).toEqual(['c1', before, after, 5])
+      expect(pool.queries[0]!.text).toContain('created_at < $2')
+      expect(pool.queries[0]!.text).toContain('created_at > $3')
     })
 
     it('clamps a caller-supplied limit above the maximum down to the maximum', async () => {

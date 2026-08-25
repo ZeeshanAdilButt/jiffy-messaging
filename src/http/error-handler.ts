@@ -4,7 +4,9 @@ import {
   ConversationNotAllowedError,
   ConversationNotFoundError,
   EmptyMessageError,
+  MessageNotFoundError,
   NotAParticipantError,
+  NotMessageAuthorError,
 } from '../core/index.js'
 
 // Express only treats a 4-argument function as an error handler, so _req
@@ -17,6 +19,16 @@ export function errorHandler(
 ): void {
   if (error instanceof ConversationNotFoundError) {
     res.status(404).json({ error: error.message })
+    return
+  }
+
+  if (error instanceof MessageNotFoundError) {
+    res.status(404).json({ error: error.message })
+    return
+  }
+
+  if (error instanceof NotMessageAuthorError) {
+    res.status(403).json({ error: error.message })
     return
   }
 

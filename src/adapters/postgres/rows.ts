@@ -5,6 +5,7 @@ export interface ConversationParticipantRow {
   created_at: Date
   user_id: string
   last_read_at: Date | null
+  cleared_at: Date | null
 }
 
 export interface MessageRow {
@@ -13,6 +14,7 @@ export interface MessageRow {
   sender_id: string
   body: string
   created_at: Date
+  deleted_at: Date | null
 }
 
 /**
@@ -36,6 +38,7 @@ export function rowToMessage(row: MessageRow): Message {
     senderId: row.sender_id,
     body: row.body,
     createdAt: row.created_at,
+    deletedAt: row.deleted_at,
   }
 }
 
@@ -54,7 +57,11 @@ export function rowsToConversations(rows: ConversationParticipantRow[]): Convers
       conversation = { id: row.id, createdAt: row.created_at, participants: [] }
       byId.set(row.id, conversation)
     }
-    conversation.participants.push({ userId: row.user_id, lastReadAt: row.last_read_at })
+    conversation.participants.push({
+      userId: row.user_id,
+      lastReadAt: row.last_read_at,
+      clearedAt: row.cleared_at,
+    })
   }
 
   return [...byId.values()]

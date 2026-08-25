@@ -8,7 +8,7 @@ describe('NoopMessageNotifier', () => {
 
     await expect(
       notifier.notify(
-        { id: 'msg_1', conversationId: 'conv_1', senderId: 'user_a', body: 'hi', createdAt: new Date() },
+        { id: 'msg_1', conversationId: 'conv_1', senderId: 'user_a', body: 'hi', createdAt: new Date(), deletedAt: null },
         ['user_b', 'user_c'],
       ),
     ).resolves.toBeUndefined()

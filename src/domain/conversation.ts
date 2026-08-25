@@ -15,6 +15,23 @@ export interface ConversationParticipant {
    * latest".
    */
   lastReadAt: Date | null
+  /**
+   * When this participant deleted the conversation for themselves, or null
+   * if they never have. Deleting a conversation is per participant on
+   * purpose: the other side's copy of a two-party thread is theirs, and
+   * nothing one participant does should remove it.
+   *
+   * The instant is the whole mechanism. A cleared conversation is hidden
+   * from that participant's list and its messages up to that instant are
+   * hidden from their thread, so anything sent afterwards brings the
+   * conversation back with only the new messages in it - which is what
+   * makes this survivable without a second "undelete" write on every send.
+   *
+   * Never leaves the service: the HTTP layer strips it before responding,
+   * since "the other person deleted this chat" is not something the other
+   * person needs told. See toConversationResponse in the HTTP router.
+   */
+  clearedAt: Date | null
 }
 
 export interface Conversation {
@@ -32,6 +49,13 @@ export interface Conversation {
    * preview.
    */
   lastMessage?: Message | null
+}
+
+export function participantOf(
+  conversation: Conversation,
+  userId: string,
+): ConversationParticipant | undefined {
+  return conversation.participants.find((p) => p.userId === userId)
 }
 
 export function isParticipant(conversation: Conversation, userId: string): boolean {

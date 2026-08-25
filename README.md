@@ -126,8 +126,12 @@ docker run -p 8080:8080 \
   ghcr.io/zeeshanadilbutt/jiffy-messaging:latest
 ```
 
-Apply [src/adapters/postgres/schema.sql](./src/adapters/postgres/schema.sql)
-to your database once before first run.
+Apply the schema to your database before first run:
+[src/adapters/postgres/schema.sql](./src/adapters/postgres/schema.sql)
+first, then every dated `.sql` file beside it, in filename order.
+`node scripts/apply-schema.mjs` does exactly that against `DATABASE_URL`.
+Every statement in every one of those files is `IF NOT EXISTS`, so it is
+safe to run on every deploy rather than once by hand.
 
 A runnable client exercising the REST and WebSocket flow end to end:
 
@@ -161,6 +165,8 @@ the `TokenVerifier` your deployment configures.
 | POST   | /conversations/:id/messages | `{ body: string }`             | 201, message        |
 | GET    | /conversations/:id/messages | `?limit=50&before=<ISO date>`  | 200, message[]      |
 | POST   | /conversations/:id/read     |                                | 204                 |
+| DELETE | /conversations/:id/messages/:messageId |                     | 200, message        |
+| DELETE | /conversations/:id          |                                | 204                 |
 
 `participantIds` on POST /conversations is capped at 50 entries; a longer
 array gets a 400 rather than being accepted and inserted one row at a
@@ -171,6 +177,57 @@ conversation's history in one request.
 Errors: 400 malformed input, 401 missing or invalid token, 403 not a
 participant (or, with a conversation gate configured, not authorized by
 it), 404 unknown conversation, 429 rate limited.
+
+### Deleting
+
+Both deletes are soft, and they mean different things on purpose. Neither
+one removes a row.
+
+**DELETE /conversations/:id/messages/:messageId** deletes a message for
+everyone in the conversation. Only the account that sent it may do this -
+any other participant gets a 403, even though they can read it: being able
+to see a message is not the same as being able to take it back. The caller
+is taken from the verified token, never from the request.
+
+The message keeps its row, its id, its sender and its place in the thread,
+loses its body, and gains a `deletedAt`. That is what comes back in the
+200, so a client can redraw the message in place, and it is also what
+every subsequent list returns to both sides:
+
+```json
+{
+  "id": "...",
+  "conversationId": "...",
+  "senderId": "user_1",
+  "body": "",
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "deletedAt": "2026-01-01T00:01:00.000Z"
+}
+```
+
+Render that as a tombstone ("this message was deleted"), not as an empty
+bubble. Repeating the call is a no-op that returns the same tombstone.
+There is no undelete, and no time window: a message can be deleted at any
+point by whoever sent it. A tombstone is also published to the message bus,
+so a client holding a WebSocket sees the deletion without refetching -
+frames for a deleted message carry a non-null `deletedAt` and an empty
+`body`, which is how a live client tells one from a new message.
+
+**DELETE /conversations/:id** deletes the conversation for the caller
+alone. Every other participant keeps it, along with every message in it.
+Any participant may do this to their own copy.
+
+The conversation drops out of that caller's GET /conversations, and every
+message up to the moment they deleted it drops out of their GET
+.../messages. Nothing else changes, and nothing is removed. If someone
+sends a new message afterwards, the conversation comes back for them with
+only the messages sent since - the cleared history stays gone. That is
+also why there is no "undelete" for this either: sending or receiving
+something new is the undelete.
+
+The instant behind this is per participant and is never returned by the
+API. One participant cannot find out whether another has deleted their
+copy of the conversation.
 
 Unauthenticated operational routes:
 
@@ -202,9 +259,15 @@ participates in, pushed as JSON:
   "conversationId": "...",
   "senderId": "user_1",
   "body": "Hello",
-  "createdAt": "2026-01-01T00:00:00.000Z"
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "deletedAt": null
 }
 ```
+
+Deleted messages arrive on the same socket in the same shape, with a
+non-null `deletedAt` and an empty `body` - a client that already has the
+message on screen should replace it rather than append it. See
+[Deleting](#deleting).
 
 Delivery is push-only; send messages over the REST API.
 
